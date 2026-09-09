@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mugs-mjlab"
+version = "0.1.0"
+description = "MuGS-MJLab Integration: mjlab-compatible sensors for photorealistic robot simulation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "MuGS Team"},
+]
+keywords = [
+    "robotics",
+    "mjlab",
+    "mujoco",
+    "3d-gaussian-splatting",
+    "simulation",
+    "rendering",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "mugs>=0.1.0",  # Core mugs package
+    "mjlab>=0.1.0",  # MJLab framework
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "gsplat>=1.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mugs_mjlab = ["py.typed"]

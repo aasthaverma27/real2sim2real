@@ -1,0 +1,57 @@
+# --- generated scenes and model weights: never commit these -----------------
+# A single scene directory runs 5-60 GB (splats, dense COLMAP, depth maps) and
+# the checkpoint set is ~134 GB. Both are reproducible from the pipeline.
+outputs/
+checkpoints/
+inputs/
+*.ply
+*.glb
+*.npz
+*.mp4
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# --- secrets ---------------------------------------------------------------
+.env
+configs/auto_pipeline.env
+configs/gui.env
+*.key
+
+# --- python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# --- editors / os ----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# --- local working artefacts ----------------------------------------------
+*.log
+*.bak
+*.pre_*
+*.orig
+MUJOCO_LOG.TXT
+
+# stray head-tilt backups from set_head_tilt.py
+*.xml.pitch*
+
+# machine-specific paths
+configs/paths.env
+
+# robot models belong to their manufacturers - keep them local
+assets/robots/*/meshes/
+assets/robots/*/*.STL
+assets/robots/*/*.stl
+assets/robots/*/*.dae
+assets/robots/*/*.obj
+
+inputs/

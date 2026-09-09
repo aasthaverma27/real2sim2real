@@ -1,0 +1,493 @@
+diff --git a/src/mugs/sensors/gaussian_sensor.py b/src/mugs/sensors/gaussian_sensor.py
+index adecd33..06e7397 100644
+--- a/src/mugs/sensors/gaussian_sensor.py
++++ b/src/mugs/sensors/gaussian_sensor.py
+@@ -68,6 +68,15 @@ class GaussianSensorConfig:
+     """MuJoCo geom names to extract as robot mask"""
+ 
+     robot_geom_ids: Optional[List[int]] = None
++
++    splat_geom_ids: Optional[List[int]] = None
++    """Geoms whose pixels are painted with the splat's colour instead of the
++    mesh's (Re3Sim's rule: mix_mask = table_mask | ground_mask, then
++    np.where(mix_mask, gaussians, sim)). The mesh still defines the silhouette
++    and the depth, so a table treated this way can never appear twice however
++    badly the splat is aligned - there is no second silhouette to disagree with.
++    Where the splat has no coverage the mesh's own render is kept, so a novel
++    viewpoint the capture never saw degrades to the mesh instead of to black."""
+     """MuJoCo geom IDs to extract as robot mask (alternative to names)"""
+ 
+     # Performance
+@@ -79,6 +88,27 @@ class GaussianSensorConfig:
+     enable_sr: bool = False
+     sr_model_path: Optional[Path] = None
+ 
++    # ── RoboSnap fork additions (see FORK_NOTES.md) ──────────────────
++    use_sh: bool = True
++    """Render with the PLY's full spherical harmonics when present. Upstream
++    keeps only the DC term, which flattens view-dependent shading."""
++
++    depth_composite: bool = False
++    """Composite by depth test rather than a binary mask, so foreground geometry
++    that is behind the splat stays hidden."""
++
++    depth_tolerance: float = 1.02
++    """Foreground wins where fg_depth <= bg_depth * depth_tolerance."""
++
++    disable_rangefinder: bool = True
++    """Hide rangefinder rays; the G1's 512 lidar rays otherwise swamp the frame."""
++
++    camera_convention: str = "mujoco"
++    """Convention of camera_params['rotation_matrix']. 'mujoco' (x right, y up,
++    z backward) needs BOTH y and z negated to reach gsplat's OpenCV basis;
++    negating z alone leaves a determinant of -1, i.e. a mirrored image.
++    'opencv' passes the basis through unchanged."""
++
+ 
+ class GaussianSensor(SensorBase):
+     """
+@@ -118,8 +148,16 @@ class GaussianSensor(SensorBase):
+ 
+         # Background cache
+         self._cached_background: Optional[np.ndarray] = None
++        self._cached_background_depth: Optional[np.ndarray] = None
+         self._cache_camera_params: Optional[Dict] = None
+ 
++        # RoboSnap: a MuJoCo Renderer owns a GL context, so build it once and
++        # reuse it across steps instead of per render() call.
++        self._renderer: Optional[mujoco.Renderer] = None
++        self._renderer_key = None
++        self._scene_option: Optional[mujoco.MjvOption] = None
++        self._last_bg_alpha: Optional[np.ndarray] = None
++
+         print(f"[GaussianSensor] Initialized:")
+         print(f"  - Resolution: {config.width}×{config.height}")
+         print(f"  - Mode: {config.render_mode}")
+@@ -173,28 +211,42 @@ class GaussianSensor(SensorBase):
+             # Normalize external camera params to internal format
+             camera_params = self._normalize_camera_params(camera_params)
+ 
+-        if self.cfg.cache_background and self._cached_background is not None:
+-            if self._cameras_equal(camera_params, self._cache_camera_params):
+-                background_rgb = self._cached_background
+-            else:
+-                background_rgb = self._render_3dgs_background(camera_params)
+-                if self.cfg.cache_background:
+-                    self._cached_background = background_rgb
+-                    self._cache_camera_params = camera_params
++        cached = (self.cfg.cache_background
++                  and self._cached_background is not None
++                  and self._cameras_equal(camera_params, self._cache_camera_params))
++        if cached:
++            background_rgb = self._cached_background
++            background_depth = self._cached_background_depth
+         else:
+-            background_rgb = self._render_3dgs_background(camera_params)
++            background_rgb, background_depth = self._render_3dgs_background(camera_params)
+             if self.cfg.cache_background:
+                 self._cached_background = background_rgb
++                self._cached_background_depth = background_depth
+                 self._cache_camera_params = camera_params
+ 
+-        # 2. Render MuJoCo foreground + segmentation
+-        foreground_rgb, seg_ids = self._render_mujoco_foreground(model, data, camera_name)
++        # 2. Render MuJoCo foreground + segmentation (+ depth when needed)
++        foreground_rgb, seg_ids, foreground_depth = self._render_mujoco_foreground(
++            model, data, camera_name, want_depth=self.cfg.depth_composite
++        )
+ 
+         # 3. Extract robot mask
+         robot_mask = self._create_robot_mask(seg_ids, model)
+ 
++        # Re3Sim substitution: hand these geoms' pixels to the splat, but only
++        # where the splat actually reconstructed something.
++        splat_painted = np.zeros_like(robot_mask, dtype=bool)
++        if self.cfg.splat_geom_ids:
++            for gid in self.cfg.splat_geom_ids:
++                splat_painted |= seg_ids == gid
++            if self._last_bg_alpha is not None:
++                splat_painted &= self._last_bg_alpha > 0.5
++            robot_mask = robot_mask & ~splat_painted
++
+         # 4. Composite
+-        composite_rgb = self._composite_images(background_rgb, foreground_rgb, robot_mask)
++        composite_rgb, visible = self._composite_images(
++            background_rgb, foreground_rgb, robot_mask,
++            background_depth=background_depth, foreground_depth=foreground_depth,
++        )
+ 
+         if return_components:
+             return {
+@@ -202,6 +254,11 @@ class GaussianSensor(SensorBase):
+                 "background": background_rgb,
+                 "foreground": foreground_rgb,
+                 "mask": robot_mask,
++                "splat_painted": splat_painted,
++                "seg_ids": seg_ids,
++                "visible": visible,
++                "background_depth": background_depth,
++                "foreground_depth": foreground_depth,
+             }
+         else:
+             return composite_rgb
+@@ -218,13 +275,13 @@ class GaussianSensor(SensorBase):
+             camera_params = self._extract_camera_params(model, data, camera_name)
+         else:
+             camera_params = self._normalize_camera_params(camera_params)
+-        return self._render_3dgs_background(camera_params)
++        return self._render_3dgs_background(camera_params)[0]
+ 
+     def _render_mujoco_only(
+         self, model: mujoco.MjModel, data: mujoco.MjData, camera_name: str
+     ) -> np.ndarray:
+         """Render only MuJoCo (no 3DGS)."""
+-        foreground_rgb, _ = self._render_mujoco_foreground(model, data, camera_name)
++        foreground_rgb, _, _ = self._render_mujoco_foreground(model, data, camera_name)
+         return foreground_rgb
+ 
+     # ─────────────────────────────────────────────────────────────
+@@ -257,14 +314,33 @@ class GaussianSensor(SensorBase):
+         )
+         quats = quats / np.linalg.norm(quats, axis=1, keepdims=True)
+ 
++        # RoboSnap: keep the higher SH bands when the PLY carries them. gsplat
++        # wants (N, (deg+1)^2, 3); f_rest_* is stored channel-major.
++        sh = None
++        sh_degree = 0
++        if self.cfg.use_sh:
++            names = {p.name for p in vertex.properties}
++            rest = sorted((n for n in names if n.startswith("f_rest_")),
++                          key=lambda n: int(n.rsplit("_", 1)[1]))
++            if rest:
++                r = np.stack([np.asarray(vertex[n]) for n in rest], axis=1)
++                r = r.reshape(len(r), 3, r.shape[1] // 3)
++                sh = np.concatenate([sh_dc[:, :, None], r], axis=2).transpose(0, 2, 1)
++                sh_degree = int(round(sh.shape[1] ** 0.5)) - 1
++
+         # Convert to torch tensors on device
+-        return {
++        out = {
+             "means": torch.from_numpy(positions).float().to(self.device),
+             "colors": torch.from_numpy(colors).float().to(self.device),
+             "opacities": torch.from_numpy(opacities).float().to(self.device),
+             "scales": torch.from_numpy(scales).float().to(self.device),
+             "quats": torch.from_numpy(quats).float().to(self.device),
++            "sh": None,
++            "sh_degree": sh_degree,
+         }
++        if sh is not None:
++            out["sh"] = torch.from_numpy(np.ascontiguousarray(sh)).float().to(self.device)
++        return out
+ 
+     def _extract_camera_params(
+         self, model: mujoco.MjModel, data: mujoco.MjData, camera_name: str
+@@ -276,11 +352,12 @@ class GaussianSensor(SensorBase):
+         camera_pos = data.cam_xpos[camera_id].copy()
+         camera_mat = data.cam_xmat[camera_id].reshape(3, 3).copy()
+ 
+-        # Intrinsics (scale to target resolution)
+-        # Note: model.cam_fovy is in radians (affected by <compiler angle="radian"/>)
+-        fov_y_radians = model.cam_fovy[camera_id]
+-        fx = (self.cfg.width / 2) / np.tan(fov_y_radians / 2)
++        # Intrinsics. RoboSnap fix: model.cam_fovy is ALWAYS degrees, whatever
++        # <compiler angle="..."/> says, and it is the *vertical* FOV, so both
++        # focal lengths derive from the image height (square pixels).
++        fov_y_radians = np.deg2rad(float(model.cam_fovy[camera_id]))
+         fy = (self.cfg.height / 2) / np.tan(fov_y_radians / 2)
++        fx = fy
+         cx = self.cfg.width / 2
+         cy = self.cfg.height / 2
+ 
+@@ -325,16 +402,24 @@ class GaussianSensor(SensorBase):
+             "cy": self.cfg.height / 2,
+         }
+ 
+-    def _render_3dgs_background(self, camera_params: Dict) -> np.ndarray:
+-        """Render 3DGS background using gsplat."""
++    def _render_3dgs_background(self, camera_params: Dict):
++        """Render 3DGS background using gsplat.
++
++        RoboSnap: returns (rgb uint8, depth float32) - the depth channel feeds
++        depth-aware compositing. Depth is 0 where nothing was splatted.
++        """
+         if self.background_gaussians is None:
+             # No background, return black
+-            return np.zeros((self.cfg.height, self.cfg.width, 3), dtype=np.uint8)
++            return (np.zeros((self.cfg.height, self.cfg.width, 3), dtype=np.uint8),
++                    np.zeros((self.cfg.height, self.cfg.width), dtype=np.float32))
+ 
+-        # Build view matrix (world → camera)
+-        # MuJoCo uses +Z forward, OpenGL/3DGS uses -Z forward
+-        R_cam = camera_params["rotation_matrix"].copy()
+-        R_cam[:, 2] = -R_cam[:, 2]  # Flip Z axis
++        # Build view matrix (world → camera).
++        # RoboSnap fix: MuJoCo cameras look down -Z with +Y up; gsplat/OpenCV
++        # want +Z forward with +Y down, so y AND z flip. Upstream flipped only
++        # z, which makes det(R) = -1 and mirrors the background vertically.
++        R_cam = np.asarray(camera_params["rotation_matrix"], dtype=np.float64).copy()
++        if self.cfg.camera_convention == "mujoco":
++            R_cam = R_cam @ np.diag([1.0, -1.0, -1.0])
+ 
+         R = R_cam.T  # Transpose for world→camera
+         t = -R @ camera_params["position"]
+@@ -351,49 +436,91 @@ class GaussianSensor(SensorBase):
+             [[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=torch.float32, device=self.device
+         )
+ 
+-        # Render with gsplat
+-        render_colors, _, _ = rasterization(
+-            means=self.background_gaussians["means"],
+-            quats=self.background_gaussians["quats"],
+-            scales=self.background_gaussians["scales"],
+-            opacities=self.background_gaussians["opacities"],
+-            colors=self.background_gaussians["colors"],
+-            viewmats=viewmat[None],
+-            Ks=K[None],
+-            width=self.cfg.width,
+-            height=self.cfg.height,
+-            packed=False,
+-        )
+-
+-        rgb = render_colors[0].clamp(0, 1)
+-        return (rgb.cpu().numpy() * 255).astype(np.uint8)
++        # Render with gsplat. RoboSnap: full SH when the PLY has it, and
++        # RGB+ED so the depth channel comes back for occlusion testing.
++        sh = self.background_gaussians.get("sh")
++        colors = sh if sh is not None else self.background_gaussians["colors"]
++        kwargs = {} if sh is None else {"sh_degree": self.background_gaussians["sh_degree"]}
++        with torch.no_grad():
++            render_out, alphas, _ = rasterization(
++                means=self.background_gaussians["means"],
++                quats=self.background_gaussians["quats"],
++                scales=self.background_gaussians["scales"],
++                opacities=self.background_gaussians["opacities"],
++                colors=colors,
++                viewmats=viewmat[None],
++                Ks=K[None],
++                width=self.cfg.width,
++                height=self.cfg.height,
++                render_mode="RGB+ED",
++                packed=False,
++                **kwargs,
++            )
++
++        rgb = render_out[0, :, :, :3].clamp(0, 1)
++        depth = render_out[0, :, :, 3]
++        self._last_bg_alpha = alphas[0, :, :, 0].detach().cpu().numpy()
++        return ((rgb.cpu().numpy() * 255).astype(np.uint8),
++                depth.detach().cpu().numpy().astype(np.float32))
+ 
+     # ─────────────────────────────────────────────────────────────
+     # Helper Methods: MuJoCo Rendering
+     # ─────────────────────────────────────────────────────────────
+ 
++    def _get_renderer(self, model: mujoco.MjModel) -> mujoco.Renderer:
++        """RoboSnap: one Renderer (one GL context) reused across steps."""
++        key = (id(model), self.cfg.height, self.cfg.width)
++        if self._renderer is None or self._renderer_key != key:
++            if self._renderer is not None:
++                self._renderer.close()
++            self._renderer = mujoco.Renderer(model, self.cfg.height, self.cfg.width)
++            self._renderer_key = key
++        if self._scene_option is None:
++            self._scene_option = mujoco.MjvOption()
++            mujoco.mjv_defaultOption(self._scene_option)
++            if self.cfg.disable_rangefinder:
++                self._scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = 0
++        return self._renderer
++
+     def _render_mujoco_foreground(
+-        self, model: mujoco.MjModel, data: mujoco.MjData, camera_name: str
+-    ) -> tuple[np.ndarray, np.ndarray]:
+-        """Render MuJoCo with RGB and segmentation."""
+-        renderer = mujoco.Renderer(model, self.cfg.height, self.cfg.width)
++        self,
++        model: mujoco.MjModel,
++        data: mujoco.MjData,
++        camera_name: str,
++        want_depth: bool = False,
++    ) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
++        """Render MuJoCo RGB, segmentation ids, and optionally metric depth."""
++        renderer = self._get_renderer(model)
+ 
+         mujoco.mj_forward(model, data)
+-        renderer.update_scene(data, camera=camera_name)
++        renderer.update_scene(data, camera=camera_name, scene_option=self._scene_option)
+ 
+         # RGB
+         rgb = renderer.render()
+ 
+         # Segmentation
+         renderer.enable_segmentation_rendering()
++        renderer.update_scene(data, camera=camera_name, scene_option=self._scene_option)
+         seg = renderer.render()
+         renderer.disable_segmentation_rendering()
+ 
+         seg_ids = seg[:, :, 0].astype(np.int32)
+ 
+-        renderer.close()
++        depth = None
++        if want_depth:
++            renderer.enable_depth_rendering()
++            renderer.update_scene(data, camera=camera_name, scene_option=self._scene_option)
++            depth = renderer.render().astype(np.float32).copy()
++            renderer.disable_depth_rendering()
++
++        return rgb, seg_ids, depth
+ 
+-        return rgb, seg_ids
++    def close(self):
++        """Release the GL context. Safe to call more than once."""
++        if self._renderer is not None:
++            self._renderer.close()
++            self._renderer = None
++            self._renderer_key = None
+ 
+     def _create_robot_mask(self, seg_ids: np.ndarray, model: mujoco.MjModel) -> np.ndarray:
+         """Create binary mask for robot geoms."""
+@@ -414,12 +541,43 @@ class GaussianSensor(SensorBase):
+         return mask
+ 
+     def _composite_images(
+-        self, background_rgb: np.ndarray, foreground_rgb: np.ndarray, mask: np.ndarray
+-    ) -> np.ndarray:
+-        """Alpha blend foreground onto background using mask."""
+-        mask_3ch = mask[:, :, None].astype(np.float32)
+-        composite = background_rgb * (1 - mask_3ch) + foreground_rgb * mask_3ch
+-        return composite.astype(np.uint8)
++        self,
++        background_rgb: np.ndarray,
++        foreground_rgb: np.ndarray,
++        mask: np.ndarray,
++        background_depth: Optional[np.ndarray] = None,
++        foreground_depth: Optional[np.ndarray] = None,
++    ) -> tuple[np.ndarray, np.ndarray]:
++        """Blend foreground over background.
++
++        Upstream behaviour is a binary mask: masked pixels always win, so a hand
++        that is physically *behind* a splatted table edge still draws in front of
++        it. With cfg.depth_composite the mask is intersected with a depth test
++        against the splat's own depth, which restores occlusion.
++
++        Returns (composite uint8, visible bool mask).
++        """
++        visible = mask.astype(bool)
++        if (self.cfg.depth_composite
++                and background_depth is not None and foreground_depth is not None):
++            bg_valid = background_depth > 0.0
++            if self._last_bg_alpha is not None:
++                bg_valid &= self._last_bg_alpha > 0.02
++            in_front = foreground_depth <= background_depth * self.cfg.depth_tolerance
++            depth_visible = visible & (~bg_valid | in_front)
++            # Guard against a bad alignment hiding the robot completely: if the
++            # depth test erases almost everything, fall back to the plain mask.
++            if visible.mean() > 0.001 and depth_visible.mean() < 0.15 * visible.mean():
++                print("[GaussianSensor] depth test rejected "
++                      f"{100 * (1 - depth_visible.mean() / max(visible.mean(), 1e-9)):.0f}% "
++                      "of the foreground - falling back to the mask")
++            else:
++                visible = depth_visible
++
++        # The mask is binary, so select instead of blending in float - at
++        # 720x1280 the float path costs more than the splat render itself.
++        composite = np.where(visible[:, :, None], foreground_rgb, background_rgb)
++        return composite.astype(np.uint8, copy=False), visible
+ 
+     # ─────────────────────────────────────────────────────────────
+     # Properties (for base class compatibility)
+diff --git a/src/mugs_mjlab/sensors/gaussian_sensor.py b/src/mugs_mjlab/sensors/gaussian_sensor.py
+index 643d037..18a7e36 100644
+--- a/src/mugs_mjlab/sensors/gaussian_sensor.py
++++ b/src/mugs_mjlab/sensors/gaussian_sensor.py
+@@ -172,6 +172,19 @@ class GaussianSensorMjlab(CameraSensor):
+         """
+         super().initialize(mj_model, model, data, device)
+ 
++        # RoboSnap: fall back to the MJCF camera's own fovy rather than a
++        # hardcoded 45 degrees. mjlab's cameras do not all use the default, and a
++        # wrong vertical FOV renders the background at the wrong zoom, which no
++        # amount of aligning the splat can fix.
++        self._model_fovy = None
++        try:
++            cam_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_CAMERA,
++                                       self.cfg.camera_name)
++            if cam_id >= 0:
++                self._model_fovy = float(mj_model.cam_fovy[cam_id])
++        except Exception:
++            pass
++
+         self._mjwarp_data = data
+         self._device = device
+         self._num_envs = data.nworld
+@@ -317,7 +330,9 @@ class GaussianSensorMjlab(CameraSensor):
+ 
+         # Build batch camera intrinsics. CameraSensorCfg.fovy is in degrees;
+         # None means the MuJoCo default of 45°.
+-        fov_y_deg = self.cfg.fovy if self.cfg.fovy is not None else 45.0
++        fov_y_deg = self.cfg.fovy
++        if fov_y_deg is None:
++            fov_y_deg = getattr(self, "_model_fovy", None) or 45.0
+         fov_y_rad = np.deg2rad(fov_y_deg)
+         fx = (self.cfg.height / 2) / np.tan(fov_y_rad / 2)
+         fy = (self.cfg.height / 2) / np.tan(fov_y_rad / 2)
+@@ -409,8 +424,18 @@ class GaussianSensorMjlab(CameraSensor):
+             Camera poses (num_envs, 4, 4) on device.
+         """
+         assert self._mjwarp_data is not None
+-        cam_pos_all = wp.to_torch(self._mjwarp_data.cam_xpos)  # (N, ncam, 3)
+-        cam_mat_all = wp.to_torch(self._mjwarp_data.cam_xmat)  # (N, ncam, 3, 3)
++        # RoboSnap: mjlab used to hand these over as bare warp arrays. Current
++        # mjlab (1.6.0) wraps them in mjlab.sim.sim_data.TorchArray, a proxy that
++        # shares memory with the warp array and exposes it as .wp_array; passing
++        # the proxy to wp.to_torch raises AttributeError on .device.is_cpu.
++        def _as_torch(x):
++            if isinstance(x, torch.Tensor):
++                return x
++            inner = getattr(x, "wp_array", None)
++            return wp.to_torch(inner if inner is not None else x)
++
++        cam_pos_all = _as_torch(self._mjwarp_data.cam_xpos)  # (N, ncam, 3)
++        cam_mat_all = _as_torch(self._mjwarp_data.cam_xmat)  # (N, ncam, 3, 3)
+         cam_pos = cam_pos_all[:, self._camera_idx, :]  # (N, 3)
+         rot_matrices = cam_mat_all[:, self._camera_idx, :, :]  # (N, 3, 3)
+ 
+@@ -420,7 +445,16 @@ class GaussianSensorMjlab(CameraSensor):
+             .expand(self._num_envs, 4, 4)
+             .clone()
+         )
+-        poses[:, :3, :3] = rot_matrices
++        # RoboSnap: MuJoCo cameras look down -Z with +Y up; gsplat/OpenCV want +Z
++        # forward with +Y down, so y and z both flip. Upstream passed cam_xmat
++        # through unchanged, which points the camera 180 degrees away from the
++        # scene - every gaussian lands behind it and the background renders
++        # entirely black, whatever the splat is aligned to.
++        flip = torch.diag(
++            torch.tensor([1.0, -1.0, -1.0], device=self._device,
++                         dtype=rot_matrices.dtype)
++        )
++        poses[:, :3, :3] = rot_matrices @ flip
+         poses[:, :3, 3] = cam_pos
+         return poses
+ 
+@@ -433,6 +467,21 @@ class GaussianSensorMjlab(CameraSensor):
+         Returns:
+             masks: (num_envs, H, W, 1) float32 [0, 1]
+         """
++        # RoboSnap: the segmentation buffer is (object_id, object_type) pairs,
++        # not a single channel of geom ids. Comparing the whole tensor against a
++        # geom id also matches the type channel, and the (N, H, W, 2) result then
++        # fails to expand to 3 channels in _composite_batch.
++        if seg_batch.shape[-1] == 2:
++            import mujoco_warp as _mw
++
++            obj_id, obj_type = seg_batch[..., 0], seg_batch[..., 1]
++            hit = obj_type == int(_mw.ObjType.GEOM)
++            if self._robot_geom_ids:
++                ids = torch.as_tensor(self._robot_geom_ids, device=seg_batch.device,
++                                      dtype=obj_id.dtype)
++                hit = hit & torch.isin(obj_id, ids)
++            return hit.unsqueeze(-1).float()
++
+         # Create mask tensor
+         masks = torch.zeros_like(seg_batch, dtype=torch.float32)
+ 

@@ -1,0 +1,108 @@
+# Unitree G1, 29 body DoF + 2x7 hand DoF.
+#
+# Everything robot-specific lives in a file like this one; the scripts under
+# scripts/realsim/ read it and are otherwise robot-agnostic. To support a
+# different robot, copy this file and change the values - no code changes.
+
+# WORKED EXAMPLE. The model itself is not committed - fetch it first:
+#     scripts/fetch_robot.sh unitree_g1
+# or point `mjcf` at wherever your copy lives. Copy this file and edit it for
+# your own robot; nothing in the codebase is G1-specific.
+name: g1_29dof_with_hand
+mjcf: assets/robots/g1/g1_29dof_with_hand.xml
+
+# --- what the reference WBC sim requires of the merged scene -----------------
+# The sim reads joint state as qpos[joint_id + 6], so the robot's free joint
+# must be joint 0 and its hinges must be 1..n_robot_joints with nothing in
+# front of them. make_wbc_scene checks this and fails loudly.
+sim:
+  base_joint: floating_base_joint
+  root_body: pelvis
+  n_robot_joints: 43
+
+# --- the canonical order the WBC observation is indexed by -------------------
+# Do not reorder. The ONNX nets were trained against exactly this sequence.
+body_joints:
+  - left_hip_pitch
+  - left_hip_roll
+  - left_hip_yaw
+  - left_knee
+  - left_ankle_pitch
+  - left_ankle_roll
+  - right_hip_pitch
+  - right_hip_roll
+  - right_hip_yaw
+  - right_knee
+  - right_ankle_pitch
+  - right_ankle_roll
+  - waist_yaw
+  - waist_roll
+  - waist_pitch
+  - left_shoulder_pitch
+  - left_shoulder_roll
+  - left_shoulder_yaw
+  - left_elbow
+  - left_wrist_roll
+  - left_wrist_pitch
+  - left_wrist_yaw
+  - right_shoulder_pitch
+  - right_shoulder_roll
+  - right_shoulder_yaw
+  - right_elbow
+  - right_wrist_roll
+  - right_wrist_pitch
+  - right_wrist_yaw
+
+# GR00T's per-hand 7-vector follows the robot model's hand GROUP order
+# (index, middle, thumb), which is NOT the MJCF's joint order (thumb first).
+# Arms are unambiguous; this ordering is the one that matters for grasps.
+hand_finger_order: [index_0, index_1, middle_0, middle_1, thumb_0, thumb_1, thumb_2]
+hand_sides: [left, right]
+
+# --- whole-body controller ---------------------------------------------------
+wbc:
+  # ${RS_WBC_MODELS} comes from configs/paths.env
+  balance_onnx: ${RS_WBC_MODELS}/GR00T-WholeBodyControl-Balance.onnx
+  walk_onnx:    ${RS_WBC_MODELS}/GR00T-WholeBodyControl-Walk.onnx
+  n_act: 15                 # 12 legs + 3 waist - what the nets emit
+  obs_history: 6
+  control_hz: 50
+  ang_vel_scale: 0.5
+  dof_pos_scale: 1.0
+  dof_vel_scale: 0.05
+  action_scale: 0.25
+  cmd_scale: [2.0, 2.0, 0.5]
+  default_height: 0.74
+  # default stance, first n_act entries drive the legs+waist
+  default_pose: [-0.1, 0, 0, 0.3, -0.2, 0,
+                 -0.1, 0, 0, 0.3, -0.2, 0,
+                  0, 0, 0]
+  kp: [150, 150, 150, 200,  40,  40,
+       150, 150, 150, 200,  40,  40,
+       250, 250, 250,
+       100, 100,  40,  40,  20,  20,  20,
+       100, 100,  40,  40,  20,  20,  20]
+  kd: [2, 2, 2, 4, 2, 2,
+       2, 2, 2, 4, 2, 2,
+       5, 5, 5,
+       5, 5, 2, 2, 2, 2, 2,
+       5, 5, 2, 2, 2, 2, 2]
+  hand_kp: 2.0
+  hand_kd: 0.1
+
+# --- head cameras ------------------------------------------------------------
+# MuJoCo cameras are strictly rectilinear pinhole, so a fisheye is rendered as
+# a 5-face cubemap and remapped (scripts/realsim/robot_camera.py).
+cameras:
+  mount_body: head_link          # a geom on torso_link - the G1 has no neck joint
+  pos: [0.075, 0.0, 0.385]       # in the mount body's frame
+  pitch_deg: 20                  # below horizontal
+  stereo:
+    model: ELP-USB3DGS1200P01-L180
+    projection: equidistant_fisheye
+    baseline_m: 0.06             # PLACEHOLDER - not measured on the real module
+    fov_deg: 170
+    resolution: [1600, 1200]
+  pinhole:
+    fov_deg: 60
+    resolution: [640, 480]

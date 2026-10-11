@@ -60,7 +60,7 @@ against a depth camera's cloud. A direct metric measurement.
 
 Everything attempted here instead — disc fits, plane RANSAC, red-cluster
 centroids, photometric NCC, ICP — is inference from geometry, good to a few
-centimetres at best. `charuco_board_A4.pdf` exists in `/mnt/ssd2/Re3Sim/`.
+centimetres at best. Re3Sim ships a printable `charuco_board_A4.pdf`.
 
 ## F4 — Fitting the table from the splat was worse than not fitting it
 
@@ -260,7 +260,7 @@ own mounting site, and at 170° an undisabled site sphere fills a chunk of frame
 Replaced with the ELP module (F9). There is **no neck joint** on this robot —
 `head_link` is a geom on `torso_link`, and the only joint above the waist is
 `waist_pitch_joint`. So "tilting the head" only ever changes the camera
-orientation; the shell cannot move. `scripts/set_head_tilt.py` rewrites the
+orientation; the shell cannot move. `set_head_tilt.py` (since removed; the CAD camera rig replaced it) rewrote the
 three head cameras' quaternions.
 
 Head-tilt geometry, for a camera 10 cm forward of the neck pivot:
@@ -276,7 +276,8 @@ Head-tilt geometry, for a camera 10 cm forward of the neck pivot:
 
 * **gsplat needs `ninja` from the `robosnap-sim` env on PATH**, or it dies with
   "Ninja is required to load C++ extensions". Prefix every command that touches
-  MuGS with `PATH=/mnt/ssd2/conda/envs/robosnap-sim/bin:$PATH`.
+  MuGS with the `robosnap-sim` env's `bin` on `PATH` (`scripts/_bootstrap.sh`
+  does this for every entry point).
 * **Long jobs must be `setsid`-detached.** A plain `nohup ... &` is killed with
   its process group when the calling shell is terminated, which silently
   truncated the first two mesh bakes.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the G1's ELP fisheye eyes - MuJoCo has no fisheye projection.
+"""Render the G1's ELP eyes, as published or as the raw sensor.
 
 Every MuJoCo camera is a rectilinear pinhole. The ELP-USB3DGS1200P01-L180 is a
 ~170 deg horizontal fisheye, and a 170 deg rectilinear render is not a wide
@@ -14,8 +14,8 @@ remaps them into an equidistant fisheye (r = f*theta), the standard model for
 this class of lens. Each face goes through MuGS, so the Gaussian background is
 in the result just as it is in the pinhole views.
 
-    scripts/fisheye_render.py --mjcf outputs/g1_ok/mujoco/scene_g1.xml \
-        --ply outputs/g1_ok/bg_lm.ply --eye both -o /tmp/elp.png
+    scripts/fisheye_render.py --mjcf outputs/myroom/mujoco/scene_g1.xml \
+        --ply outputs/myroom/bg_lm.ply --eye both -o /tmp/elp.png
 """
 from __future__ import annotations
 
@@ -78,9 +78,15 @@ def main() -> int:
     p.add_argument("--prefix", default="g1_", help="prefix add_robot.py applied")
     p.add_argument("--probe-camera", default="scene_view",
                    help="a worldbody camera to borrow for the cube faces")
-    p.add_argument("--width", type=int, default=800)
-    p.add_argument("--height", type=int, default=600)
-    p.add_argument("--fov-h", type=float, default=170.0)
+    p.add_argument("--projection", choices=["rectilinear", "fisheye"],
+                   default="rectilinear",
+                   help="rectilinear reproduces the PUBLISHED stream (the 0.6 "
+                        "centre crop, which is rectilinear in practice); "
+                        "fisheye reproduces the raw uncropped sensor")
+    p.add_argument("--width", type=int, default=768)
+    p.add_argument("--height", type=int, default=432)
+    p.add_argument("--fov-h", type=float, default=170.0,
+                   help="only used by --projection fisheye")
     p.add_argument("--face-size", type=int, default=768)
     p.add_argument("--exclude-geoms", default="floor")
     p.add_argument("-o", "--output", type=Path)
@@ -127,11 +133,37 @@ def main() -> int:
 
     eyes = ([a.prefix + "elp_left", a.prefix + "elp_right"]
             if a.eye == "both" else [a.prefix + a.eye])
-    dirs, valid, f_px, vert = fisheye_rays(a.width, a.height, a.fov_h)
-    print(f"[fisheye] equidistant f={f_px:.1f} px/rad from {a.fov_h} deg horizontal"
-          f" -> {vert:.1f} deg vertical over {a.height} px")
+    if a.projection == "fisheye":
+        dirs, valid, f_px, vert = fisheye_rays(a.width, a.height, a.fov_h)
+        print(f"[elp] equidistant f={f_px:.1f} px/rad from {a.fov_h} deg horizontal"
+              f" -> {vert:.1f} deg vertical over {a.height} px")
+    else:
+        cid0 = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, eyes[0])
+        if cid0 < 0:
+            raise SystemExit(f"no camera {eyes[0]!r} in this MJCF")
+        fovy = float(model.cam_fovy[cid0])
+        f_rect = (a.height / 2.0) / np.tan(np.radians(fovy) / 2.0)
+        fov_h = 2 * np.degrees(np.arctan((a.width / 2.0) / f_rect))
+        print(f"[elp] rectilinear, matching the published stream: "
+              f"{a.width}x{a.height}, fovy {fovy:.3f} deg (f={f_rect:.1f} px), "
+              f"{fov_h:.1f} deg horizontal")
 
-    def render_eyes():
+    def render_rectilinear():
+        """One render per eye, straight through the eye's own pose."""
+        outs = []
+        for eye in eyes:
+            cid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, eye)
+            if cid < 0:
+                raise SystemExit(f"no camera {eye!r}; is the ELP module in this MJCF?")
+            outs.append(sensor.render(
+                model, data, eye,
+                camera_params={"position": data.cam_xpos[cid].copy(),
+                               "rotation": data.cam_xmat[cid].reshape(3, 3).copy(),
+                               "fx": f_rect, "fy": f_rect,
+                               "width": a.width, "height": a.height}))
+        return np.concatenate(outs, 1) if len(outs) > 1 else outs[0]
+
+    def render_fisheye():
         outs = []
         for eye in eyes:
             cid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, eye)
@@ -181,8 +213,11 @@ def main() -> int:
 
         return np.concatenate(outs, 1) if len(outs) > 1 else outs[0]
 
+    render_eyes = render_rectilinear if a.projection == "rectilinear" else render_fisheye
+
     if a.live:
-        win = "ELP-USB3DGS1200P01-L180  fisheye stereo"
+        win = (f"ELP-USB3DGS1200P01-L180  {a.projection} stereo  "
+               f"{a.width}x{a.height}")
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(win, min(1600, a.width * len(eyes)), a.height)
         if a.pos:
@@ -201,7 +236,7 @@ def main() -> int:
                     mujoco.mj_step(model, data)
             img = render_eyes()
             disp = np.ascontiguousarray(img[:, :, ::-1])
-            cv2.putText(disp, f"ELP fisheye {a.fov_h:.0f} deg h  "
+            cv2.putText(disp, f"ELP {a.projection}  "
                               f"{'RUN' if running else 'PAUSE'}",
                         (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             cv2.imshow(win, disp)

@@ -121,6 +121,11 @@ def run_colmap(image_dir: Path, colmap_dir: Path, matcher: str) -> None:
         "registered": rec.num_reg_images(),
         "points3D": rec.num_points3D(),
     }, indent=2))
+    # Camera centres, for the manual alignment fallback (tune_splat_yaw.py and
+    # apply_splat_transform.py --scale/--yaw read the walk's plane from them).
+    (colmap_dir.parent / "colmap_poses.json").write_text(json.dumps(
+        {im.name: {"C": [float(x) for x in im.projection_center()]}
+         for im in rec.images.values()}, indent=1))
 
 
 def main() -> int:
@@ -132,12 +137,29 @@ def main() -> int:
     p.add_argument("--frames", type=int, default=300,
                    help="How many to sample. MuGS's own guide asks for 50-300.")
     p.add_argument("--long-side", type=int, default=960)
+    p.add_argument("--extra-image", type=Path, default=None,
+                   help="A still to reconstruct ALONGSIDE the video, named so it "
+                        "sorts first. Used for an object photo shot separately "
+                        "from an object-free room video: it has no frame 0 to be, "
+                        "so it is given a pose the same way every frame gets one. "
+                        "Sequential matching pairs it with the frames around the "
+                        "start, which is where it was taken from.")
     p.add_argument("--matcher", choices=("sequential", "exhaustive"),
                    default="sequential")
     a = p.parse_args()
 
     images = a.out / "images"
     n = extract_frames(a.video, images, a.frames, a.long_side)
+    if a.extra_image is not None:
+        import subprocess as sp
+        dst = images / f"00000{a.extra_image.suffix.lower()}"
+        sp.run(["ffmpeg", "-v", "error", "-y", "-i", str(a.extra_image),
+                "-vf", f"scale='if(gt(iw,ih),-2,{a.long_side})':"
+                       f"'if(gt(iw,ih),{a.long_side},-2)'",
+                "-q:v", "2", str(dst)], check=True)
+        print(f"[frames] + {a.extra_image.name} as {dst.name} "
+              f"(object photo, reconstructed with the rest)", flush=True)
+        n += 1
     if n < 20:
         raise SystemExit(f"only {n} frames extracted - too few for SfM")
     run_colmap(images, a.out / "colmap", a.matcher)

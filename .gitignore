@@ -3,7 +3,6 @@
 # the checkpoint set is ~134 GB. Both are reproducible from the pipeline.
 outputs/
 checkpoints/
-inputs/
 *.ply
 *.glb
 *.npz
@@ -41,14 +40,17 @@ dist/
 *.orig
 MUJOCO_LOG.TXT
 
-# stray head-tilt backups from set_head_tilt.py
-*.xml.pitch*
+*.bak_*
+*.prelight_*
 
 # machine-specific paths
 configs/paths.env
 
 # robot models belong to their manufacturers - keep them local
-assets/robots/*/meshes/
+# (scripts/fetch_g1_meshes.sh puts the G1 ones in place). The camera-rig parts
+# under meshes/cad/ are our own CAD and ship with the repo.
+assets/robots/*/meshes/*
+!assets/robots/g1/meshes/cad/
 assets/robots/*/*.STL
 assets/robots/*/*.stl
 assets/robots/*/*.dae

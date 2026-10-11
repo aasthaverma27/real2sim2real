@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Live interactive viewer driven by MuGS's own GaussianSensor.
 
-`hybrid_viewer.py` composites the two layers itself in numpy - fine for looking
-around, but it is not MuGS. This drives `mugs.sensors.GaussianSensor.render`
+This drives `mugs.sensors.GaussianSensor.render`
 once per frame, so what is on screen comes out of the same code path as
 `mugs_render.py` and any MuGS rollout: MuGS's segmentation mask, its depth test,
 its gsplat call. Nothing here reimplements the compositing.
@@ -85,6 +84,11 @@ def main() -> int:
     p.add_argument("--fixed-camera", default=None,
                    help="render from this camera as it is (e.g. a robot eye); "
                         "orbit is disabled and the camera is not moved")
+    p.add_argument("--visual-dr", nargs="?", const="", default=None,
+                   metavar="CONFIG",
+                   help="apply the sim's visual-randomization seed (with "
+                        "--mirror); CONFIG defaults to "
+                        "configs/visual_randomization.yaml")
     a = p.parse_args()
 
     import cv2
@@ -147,6 +151,12 @@ def main() -> int:
             depth_composite=True, camera_convention="mujoco"))
 
     sensor = make_sensor(modes[mode_i])
+    visual = None
+    if a.visual_dr is not None and mirror is not None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "realsim"))
+        from visual_randomizer import VisualDRFollower
+        visual = VisualDRFollower(model, a.visual_dr or None, [sensor],
+                                  tag="hybrid")
     print(f"[mugs-viewer] {len(fg_ids)}/{model.ngeom} foreground geoms, "
           f"fovy {fovy:.2f}, camera {cam_name!r}"
           f"{' (fixed)' if a.fixed_camera else ''}", flush=True)
@@ -270,6 +280,8 @@ def main() -> int:
                     data.ctrl[:] = hold
                 if mirror is not None:
                     mirror.apply(data)          # the DDS sim owns the physics
+                    if visual is not None:
+                        visual.update(mirror)
                 else:
                     mujoco.mj_step(model, data)
                 if base_q is not None:
@@ -323,6 +335,8 @@ def main() -> int:
         elif k in (ord('b'), ord('B')):
             mode_i = (mode_i + 1) % len(modes)
             sensor.close(); sensor = make_sensor(modes[mode_i])
+            if visual is not None:
+                visual.sensors.clear(); visual.attach(sensor)
             print(f"[mugs-viewer] mode -> {modes[mode_i]}", flush=True)
         elif k == 81: cs["az"] -= 3
         elif k == 83: cs["az"] += 3

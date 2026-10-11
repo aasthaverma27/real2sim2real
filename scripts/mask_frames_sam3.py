@@ -56,6 +56,13 @@ def main() -> int:
                         "of the frame - a text prompt that latches onto the "
                         "whole table would erase the scene.")
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--proc-long-side", type=int, default=1024,
+                   help="Segment at this resolution and scale the mask back up. "
+                        "Full-resolution training frames need ~5 GB of VRAM here, "
+                        "which a shared card often does not have; the mask is "
+                        "dilated by several pixels afterwards regardless, so the "
+                        "detail this gives up is detail that is then thrown away. "
+                        "0 segments at native resolution.")
     a = p.parse_args()
 
     sys.path.insert(0, str(a.sam3_dir))
@@ -83,8 +90,14 @@ def main() -> int:
     for i, f in enumerate(frames):
         img = Image.open(f).convert("RGB")
         W, H = img.size
-        state = proc.set_image(img)
-        acc = np.zeros((H, W), np.uint8)
+        small = img
+        if a.proc_long_side and max(W, H) > a.proc_long_side:
+            r = a.proc_long_side / max(W, H)
+            small = img.resize((max(1, round(W * r)), max(1, round(H * r))),
+                               Image.BILINEAR)
+        sw, sh = small.size
+        state = proc.set_image(small)
+        acc = np.zeros((sh, sw), np.uint8)
         for q in prompts:
             proc.reset_all_prompts(state)
             proc.set_text_prompt(prompt=q, state=state)
@@ -100,6 +113,11 @@ def main() -> int:
                     continue
                 acc |= m
                 stats[q] += 1
+        if (sw, sh) != (W, H):
+            # nearest, then dilate: interpolating a binary mask and
+            # re-thresholding it would nibble the silhouette back in, which is
+            # the opposite of what the dilation below is for
+            acc = cv2.resize(acc, (W, H), interpolation=cv2.INTER_NEAREST)
         if kern is not None and acc.any():
             acc = cv2.dilate(acc, kern)
         cv2.imwrite(str(a.out / f"{f.stem}.png"), acc * 255)

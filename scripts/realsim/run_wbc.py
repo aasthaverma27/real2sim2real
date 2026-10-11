@@ -24,8 +24,8 @@ drives the arms and hands while the controller keeps the legs under it; without
 it the arms hold the descriptor's default stance and the balance net runs alone.
 
     scripts/realsim/run_wbc.py --robot g1_29dof_with_hand \
-        --mjcf outputs/g1_ok/mujoco/scene_g1.xml \
-        --ply outputs/g1_ok/gs_bg_notripod.ply --camera cap --fovy 55.21
+        --mjcf outputs/myroom/mujoco/scene_g1.xml \
+        --ply outputs/myroom/gs_bg_notripod.ply --camera cap --fovy 55.21
 """
 from __future__ import annotations
 
@@ -178,6 +178,13 @@ def main() -> int:
                         "--mirror PORT --mirror-frame identity shows THIS "
                         "simulation instead of stepping its own.")
     p.add_argument("--vram-cap-gb", type=float, default=22.0)
+    p.add_argument("--no-randomize", dest="randomize", action="store_false",
+                   help="keep the fixed table layout; by default every reset "
+                        "(backspace in the viewer) reshuffles the objects.")
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--reach-min", type=float, default=0.36,
+                   help="closest an object may spawn to the robot base, metres")
+    p.add_argument("--reach-max", type=float, default=0.52)
     a = p.parse_args()
 
     import cv2
@@ -193,33 +200,60 @@ def main() -> int:
     kp, kd = spec.gains()
     default = spec.default_pose()
 
-    # Stand the robot in the controller's default stance, feet on the floor.
-    mujoco.mj_resetData(model, data)
-    data.qpos[adr["body_q"]] = default
-    data.qpos[adr["hand_q"]] = 0.0
-    mujoco.mj_forward(model, data)
-    gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
-    floor_z = float(model.geom_pos[gid][2]) if gid >= 0 else 0.0
-    robot_bodies = {int(model.jnt_bodyid[j]) for j in range(model.njnt)}
-    low = float("inf")
-    for g in range(model.ngeom):
-        if int(model.geom_bodyid[g]) not in robot_bodies:
-            continue
-        nm = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
-                               int(model.geom_bodyid[g])) or ""
-        if a.prefix and not nm.startswith(a.prefix):
-            continue
-        pos, mat = data.geom_xpos[g], data.geom_xmat[g].reshape(3, 3)
-        if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH:
-            mid = int(model.geom_dataid[g])
-            v0, n0 = int(model.mesh_vertadr[mid]), int(model.mesh_vertnum[mid])
-            V = model.mesh_vert[v0:v0 + n0].reshape(-1, 3) @ mat.T + pos
-            low = min(low, float(V[:, 2].min()))
-        else:
-            low = min(low, float(pos[2] - model.geom_size[g].max()))
-    if np.isfinite(low):
-        data.qpos[adr["base_q"] + 2] += floor_z + 0.002 - low
+    def stand():
+        """Put the robot in the controller's default stance, feet on the floor."""
+        mujoco.mj_resetData(model, data)
+        data.qpos[adr["body_q"]] = default
+        data.qpos[adr["hand_q"]] = 0.0
         mujoco.mj_forward(model, data)
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+        floor_z = float(model.geom_pos[gid][2]) if gid >= 0 else 0.0
+        robot_bodies = {int(model.jnt_bodyid[j]) for j in range(model.njnt)}
+        low = float("inf")
+        for g in range(model.ngeom):
+            if int(model.geom_bodyid[g]) not in robot_bodies:
+                continue
+            nm = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
+                                   int(model.geom_bodyid[g])) or ""
+            if a.prefix and not nm.startswith(a.prefix):
+                continue
+            pos, mat = data.geom_xpos[g], data.geom_xmat[g].reshape(3, 3)
+            if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH:
+                mid = int(model.geom_dataid[g])
+                v0, n0 = int(model.mesh_vertadr[mid]), int(model.mesh_vertnum[mid])
+                V = model.mesh_vert[v0:v0 + n0].reshape(-1, 3) @ mat.T + pos
+                low = min(low, float(V[:, 2].min()))
+            else:
+                low = min(low, float(pos[2] - model.geom_size[g].max()))
+        if np.isfinite(low):
+            data.qpos[adr["base_q"] + 2] += floor_z + 0.002 - low
+            mujoco.mj_forward(model, data)
+
+    stand()
+
+    # The viewer's backspace resets qpos to qpos0, which both drops the stance
+    # and puts the objects back in one fixed layout.  Reshuffle them instead so
+    # every episode starts somewhere new - within the robot's half of the table
+    # and within arm's reach, or teleoperation gets awkward.
+    rand = None
+    if a.randomize:
+        from randomize_objects import TableRandomizer
+        try:
+            rand = TableRandomizer(model, data, seed=a.seed,
+                                   reach=(a.reach_min, a.reach_max))
+        except ValueError as e:
+            print(f"[wbc] object randomization off: {e}")
+
+    def reset_layout():
+        stand()
+        if rand is not None:
+            placed = rand.apply(data)
+            mujoco.mj_forward(model, data)
+            print("[wbc] layout " + "  ".join(
+                f"{n.split('_', 1)[-1]}=({p[0]:+.3f},{p[1]:+.3f})"
+                for n, p in placed.items()))
+
+    reset_layout()
     print(f"[wbc] {spec.name}: stance set, base z={data.qpos[adr['base_q'] + 2]:+.3f}")
 
     wbc = Wbc(spec)
@@ -338,6 +372,7 @@ def main() -> int:
             pass
 
     t0, step, queries = time.perf_counter(), 0, 0
+    last_time = data.time
     try:
         while True:
             if groot is not None and step % per_action == 0:
@@ -376,6 +411,10 @@ def main() -> int:
             if passive is not None:
                 if not passive.is_running():
                     break
+                if data.time < last_time - 1e-9:   # backspace in the viewer
+                    reset_layout()
+                    step = 0
+                last_time = data.time
                 passive.sync()
 
             if step % per_action == 0:

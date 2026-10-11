@@ -4,10 +4,6 @@
 # scripts/realsim/ read it and are otherwise robot-agnostic. To support a
 # different robot, copy this file and change the values - no code changes.
 
-# WORKED EXAMPLE. The model itself is not committed - fetch it first:
-#     scripts/fetch_robot.sh unitree_g1
-# or point `mjcf` at wherever your copy lives. Copy this file and edit it for
-# your own robot; nothing in the codebase is G1-specific.
 name: g1_29dof_with_hand
 mjcf: assets/robots/g1/g1_29dof_with_hand.xml
 
@@ -90,19 +86,286 @@ wbc:
   hand_kp: 2.0
   hand_kd: 0.1
 
-# --- head cameras ------------------------------------------------------------
-# MuJoCo cameras are strictly rectilinear pinhole, so a fisheye is rendered as
-# a 5-face cubemap and remapped (scripts/realsim/robot_camera.py).
+# --- cameras -----------------------------------------------------------------
+# Everything below the `measured:` keys was read off the real robot on
+# 2026-09-11, not taken from a datasheet: the V4L2 mode lists came from
+# `v4l2-ctl --list-formats-ext` on the robot's onboard computer, and the
+# sensor_roi fractions came from SIFT-registering a still scene captured at
+# several modes against the full-sensor mode.
+#
+# The chain each published frame goes through, in order:
+#   sensor native -> capture mode (a sensor ROI + a downscale, NOT a plain
+#   resize) -> optional stereo split -> optional undistort -> centre crop ->
+#   jpeg -> the VLA client's resize to 640x480.
+# The sim has to reproduce all of it, so all of it is written down here.
 cameras:
-  mount_body: head_link          # a geom on torso_link - the G1 has no neck joint
-  pos: [0.075, 0.0, 0.385]       # in the mount body's frame
-  pitch_deg: 20                  # below horizontal
-  stereo:
-    model: ELP-USB3DGS1200P01-L180
-    projection: equidistant_fisheye
-    baseline_m: 0.06             # PLACEHOLDER - not measured on the real module
-    fov_deg: 170
-    resolution: [1600, 1200]
-  pinhole:
-    fov_deg: 60
+  # What every consumer finally receives. clinet.py resizes each stream to this
+  # with cv2.resize, so 16:9 sources are squashed anisotropically into 4:3.
+  vla_input:
     resolution: [640, 480]
+    color: rgb
+    note: anisotropic - 768x432 and 1280x720 are both squeezed to 4:3
+
+  head:
+    # ELP-USB3DGS1200P01-L180, synchronous dual global-shutter OG02B10.
+    # USB 32e4:2b10, "3D USB Camera".
+    model: ELP-USB3DGS1200P01-L180
+    device: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.1:1.0-video-index0
+    topics: [stereo/left, stereo/right]
+    mount_body: torso_link
+    pos: [0.075, 0.0, 0.385]
+    baseline_m: 0.06              # measured centre-to-centre on the module, 2026-09-08
+    projection: equidistant_fisheye
+    measured:
+      native: [3200, 1200]        # side-by-side; 1600x1200 per eye, 4:3
+      per_eye_native: [1600, 1200]
+      # The fisheye image circle does not fill the sensor: it is inscribed in
+      # the width and clipped top and bottom. Radius and centre in per-eye
+      # pixels, fitted to the texture boundary of the full-res frame.
+      image_circle:
+        left:  {centre: [782.5, 600.6], radius: 783.7}
+        right: {centre: [766.9, 596.9], radius: 794.3}
+      capture_mode: [2560, 720]   # what the real server opens, MJPG @30
+      # that mode is a centred sensor ROI followed by a downscale, per eye:
+      sensor_roi_frac: [0.980, 0.735]   # -> 1568 x 882 of 1600 x 1200
+      downscale: 0.8162                 # -> 1280 x 720 per eye
+      undistort: false            # raw fisheye reaches the VLA
+      crop: 0.6                   # centred -> published 768 x 432
+      published: [768, 432]
+      published_sensor_roi_px: [941, 529]   # what 768x432 covers on the sensor
+    # theta_max is the one number still unmeasured: the lens is named L180 but
+    # the repo has previously assumed 170. It sets f = radius / theta_max and
+    # therefore the rendered FOV, so it is left explicit rather than guessed.
+    derived:
+      f_px_per_rad_if_180deg: 499.7
+      f_px_per_rad_if_170deg: 529.2
+      published_fov_deg_if_180: [107.9, 60.6]   # horizontal, vertical
+      published_fov_deg_if_170: [101.8, 57.3]
+    unknown: [theta_max, distortion_coeffs]
+
+    # --- what the SIM renders, measured from the real data (2026-09-14) ------
+    # The published head stream is NOT fisheye in practice: crop 0.6 throws away
+    # exactly the annulus where the distortion lives. Straight checkerboard
+    # edges in the real frames bow a MEDIAN 0.59 px (90th pct 2.63) over 406
+    # lines, so a plain MuJoCo pinhole reproduces it and the cubemap path in
+    # scripts/fisheye_render.py is not needed for this stream.
+    #
+    # Render at the PUBLISHED 768x432 and resize to 640x480 afterwards, the way
+    # the real VLA client does. A single 4:3 pinhole cannot stand in: after that
+    # anisotropic squash fx and fy no longer share a focal length
+    # (fx = 452*640/768 = 376.7, fy = 452*480/432 = 502.2 in the 640x480 image).
+    sim:
+      camera: head_pinhole          # g1_head_pinhole in the built scene
+      projection: pinhole
+      resolution: [768, 432]        # render native, then resize
+      output_resolution: [640, 480] # what vla_camera_server publishes
+      fovy: 51.084                  # 2*atan((432/2)/452), vertical, degrees
+      f_px: 452                     # at 768x432; hfov 80.7 deg, vfov 51.1 deg
+      pitch_deg: 56.7               # optical axis below horizontal, measured
+      quat: [0.677460, 0.202603, -0.202603, -0.677460]   # torso_link frame
+      measured_pitch:
+        # cv2.findChessboardCornersSB (8x6 inner corners, 27.94 mm squares) +
+        # solvePnP on 159 ego_view frames across 9 episodes. The board lies flat
+        # on the table, so its normal is world-up and the board-normal-to-optical
+        # -axis angle IS the camera tilt below horizontal.
+        method: solvePnP on flat checkerboard, board normal = world up
+        n_frames: 159
+        mean_deg: 57.0
+        median_deg: 56.7
+        std_deg: 2.8
+        p10_p90_deg: [53.9, 60.5]
+        per_episode_median_deg: [53.5, 53.8, 54.1, 54.5, 55.2, 56.8, 57.1, 59.1, 60.2]
+        insensitive_to_f: median moves 56.7 -> 56.0 over f = 420..520 px
+      uncertainty:
+        f_px_band: [420, 490]       # 10%-reprojection-error band; fovy 54.4..47.6
+        fovy_band_deg: [47.6, 54.4] # i.e. +-3.5 deg on a 51.1 deg vfov
+        square_size_pct: 4.5        # user measured 1.1 in; scales f linearly
+        f_alt_estimate_px: 520      # a second, noisier fit - 452 is provisional
+        pitch_note: >
+          The measured 56.7 deg is the camera's tilt in WORLD, which equals the
+          MJCF value only if the torso was upright during collection. waist_pitch
+          held 0.011 rad (0.65 deg) so the waist adds nothing, but the pelvis
+          lean during those episodes is not recorded in observation.state[43].
+          The per-episode spread of 53.5-60.2 deg is most likely exactly that
+          torso lean varying, not detector noise.
+
+    # --- board-free cross-check of f, 2026-09-14 ----------------------------
+    # Both grippers enter the ego_view frame, so the same joint-state-driven
+    # silhouette match was run on the head camera, scanning fovy 44-70 deg with
+    # the measured 56.7 deg pitch held fixed and a per-frame 2-D shift allowed to
+    # absorb the unrecorded torso lean. Score = oriented-gradient agreement along
+    # the projected robot silhouette, 44 frames across all 11 episodes, with a
+    # mismatched-frame null subtracted to remove the "bigger silhouette catches
+    # more clutter" bias.
+    #   delta(signal - null): 0.063+-0.026 @44, 0.051+-0.032 @46, 0.057+-0.029 @48,
+    #     0.051+-0.029 @50, 0.050+-0.031 @52, 0.038+-0.028 @54, 0.024+-0.026 @56,
+    #     0.015+-0.029 @58, 0.022+-0.033 @60, 0.031+-0.027 @62, ~0.02 @64-70.
+    # Every value from 44 to 52 is within one standard error of every other, so
+    # this does NOT tighten f. It does weakly disfavour fovy > 54 (f < 430 px),
+    # which argues against the noisier 520 px alternative only in the other
+    # direction - it is consistent with the existing 452 px / 51.084 deg.
+    # fovy was therefore LEFT UNCHANGED.
+    fovy_crosscheck_2026_09_14:
+      method: gripper/arm silhouette vs recorded observation.state, no checkerboard
+      result: not constraining; fovy left at 51.084 (f = 452 px at 768x432)
+      weak_bound: fovy <= 54 deg (f >= 430 px) preferred over the 56-70 deg range
+
+  wrist_left:
+    # Waveshare IMX335 5MP USB. Both wrist cameras are USB 0abd:8050 and BOTH
+    # report iSerial 20250606105, so a /dev/v4l/by-id/ path cannot tell them
+    # apart - it resolves to whichever enumerated last. Pin by bus path only.
+    model: waveshare-imx335-5mp-usb
+    device: /dev/v4l/by-path/platform-3610000.xhci-usb-0:3:1.0-video-index0
+    topics: [hand_left]
+    mount_body: left_wrist_roll_link
+    measured:
+      native: [2592, 1944]        # 4:3, lens covers the whole sensor (no image circle)
+      capture_mode: [1280, 720]   # MJPG @30
+      sensor_roi_frac: [1.0, 0.747]     # full width, 16:9 letterbox -> 2592 x 1452
+      downscale: 0.4962                 # -> 1280 x 720
+      undistort: false            # raw barrel reaches the VLA
+      crop: 1.0
+      published: [1280, 720]
+    # Read out of g1-camera-mount-dex3-left.step by parsing the B-rep: the face
+    # normals fall into three perpendicular groups that are the part's design
+    # frame, and the camera seat is a fourth group at exactly 20 deg to the main
+    # plate - the 160 deg on the drawing. This fixes the camera's pose relative
+    # to the MOUNT completely. What the STEP cannot give is where the mount sits
+    # on the robot: it contains the bracket alone, with no robot geometry, and
+    # its one large cylinder (95 mm dia) is not a forearm clamp - the G1 wrist
+    # links are only 57-60 mm across - so there is nothing to register against.
+    mount:
+      step_file: g1-camera-mount-dex3-left.step
+      envelope_mm: [63.6, 77.3, 34.3]
+      seat_tilt_deg: 20.0         # camera seat face vs the main mounting plate
+      screw_pattern: {count: 2, dia_mm: 2.4, pitch_mm: 14.0}
+      optical_axis: normal to the seat face, i.e. 20 deg off the plate normal
+    unknown: [focal_length, distortion_coeffs, mount_pose_on_link]
+
+
+    # --- board-free sim-vs-real check, 2026-09-14 --------------------------
+    # Method: set the sim to a recorded frame's observation.state and render this
+    # wrist camera, then compare the robot's OWN hardware in sim against the same
+    # hardware in the real frame. No checkerboard, no new recording.
+    #   data: 2026-09-12-11-30-03-G1-sim, 11 episodes / 3290 frames, REAL imagery.
+    # RESULT: the camera pose and fovy are NOT determined by this data. Ten
+    # Nelder-Mead restarts from random seeds land on mutually inconsistent optima
+    # (azimuth spanning +-180 deg, elevation -72..+48 deg, fovy 45..130 deg) whose
+    # scores differ by <10%. Nothing below has been written into the MJCF; the
+    # camera still carries the CAD-derived guess (seat tilt 20 deg, roll 0, fovy 80).
+    sim_vs_real_2026_09_14:
+      status: UNDETERMINED - the MJCF values are a CAD guess, not a measurement
+      fovy: unresolved            # optimiser spans 45-130 deg at equal score
+      roll: unresolved            # flat: no restart agreed with any other
+      pitch: unresolved           # flat
+      agreement: soft-IoU 0.34-0.47 for every restart - no discrimination
+      real_segmentation:
+        thresholding: >
+          UNRELIABLE - the Dex3 palm is specular mid-grey (V~111 in the published
+          frames) and overlaps the "black" checkerboard squares (V~131); no global
+          threshold separates hand from scene.
+        what_worked: >
+          per-pixel temporal std over all 3290 frames. The hardware that is rigid
+          with the camera has low variance and comes out as a crisp mask; it
+          covers 14% of the right frame and 21% of the left frame.
+      key_finding_mount_body: >
+        That crisp low-variance object does not move by more than a few pixels
+        across the whole dataset, including left wrist_pitch swings of +-1.01 rad
+        (58 deg) and left wrist_roll swings of +-1.0 rad. It is therefore rigid
+        with the camera. A camera on <side>_wrist_roll_link (what the MJCF says)
+        has only that link's own 60 mm mesh rigid with it, which subtends under
+        2% of the frame at fovy 80 - an order of magnitude too little. The object
+        is the Dex3 palm, whose mesh hangs off <side>_wrist_yaw_link. The camera
+        is bracketed to the HAND BASE, not to the forearm, which is consistent
+        with the bracket's own filename (g1-camera-mount-dex3-left.step) and with
+        the black bracket visible at the hand/forearm junction in the ego_view
+        frames. mount_body above is very likely wrong.
+      other_blockers:
+        - >
+          the real wrist stream has strong barrel distortion (measured.undistort
+          is false) and much of the self-geometry sits in the periphery, where a
+          MuJoCo pinhole cannot follow it even at the correct fovy.
+        - >
+          the right wrist joints move only ~21 deg over the whole dataset, so the
+          self-silhouette barely changes; the objective reduces to "put a blob of
+          the right area in the right place", which ~3 numbers can satisfy and
+          which cannot pin 3 angles plus fovy.
+      next_step: >
+        Measure the bracket pose directly (photograph the mount on the hand, or
+        supply the right-hand STEP and where it seats on the Dex3), or record a
+        short clip with a target rigidly fixed to the palm. Silhouette matching
+        alone will not close this.
+      verification_image: calib/verify_wrist_left_vs_real.png
+  wrist_right:
+    model: waveshare-imx335-5mp-usb
+    device: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.3:1.0-video-index0
+    topics: [hand_right]
+    mount_body: right_wrist_roll_link
+    measured:
+      native: [2592, 1944]
+      capture_mode: [1280, 720]
+      sensor_roi_frac: [1.0, 0.747]
+      downscale: 0.4960
+      undistort: false
+      crop: 1.0
+      published: [1280, 720]
+    # Mirror of the left bracket; only the left STEP has been supplied so far.
+    mount:
+      step_file: null
+      seat_tilt_deg: 20.0
+      screw_pattern: {count: 2, dia_mm: 2.4, pitch_mm: 14.0}
+    unknown: [focal_length, distortion_coeffs, mount_pose_on_link, step_file]
+
+    # --- board-free sim-vs-real check, 2026-09-14 --------------------------
+    # Method: set the sim to a recorded frame's observation.state and render this
+    # wrist camera, then compare the robot's OWN hardware in sim against the same
+    # hardware in the real frame. No checkerboard, no new recording.
+    #   data: 2026-09-12-11-30-03-G1-sim, 11 episodes / 3290 frames, REAL imagery.
+    # RESULT: the camera pose and fovy are NOT determined by this data. Ten
+    # Nelder-Mead restarts from random seeds land on mutually inconsistent optima
+    # (azimuth spanning +-180 deg, elevation -72..+48 deg, fovy 45..130 deg) whose
+    # scores differ by <10%. Nothing below has been written into the MJCF; the
+    # camera still carries the CAD-derived guess (seat tilt 20 deg, roll 0, fovy 80).
+    sim_vs_real_2026_09_14:
+      status: UNDETERMINED - the MJCF values are a CAD guess, not a measurement
+      fovy: unresolved            # optimiser spans 45-130 deg at equal score
+      roll: unresolved            # flat: no restart agreed with any other
+      pitch: unresolved           # flat
+      agreement: soft-IoU 0.34-0.47 for every restart - no discrimination
+      real_segmentation:
+        thresholding: >
+          UNRELIABLE - the Dex3 palm is specular mid-grey (V~111 in the published
+          frames) and overlaps the "black" checkerboard squares (V~131); no global
+          threshold separates hand from scene.
+        what_worked: >
+          per-pixel temporal std over all 3290 frames. The hardware that is rigid
+          with the camera has low variance and comes out as a crisp mask; it
+          covers 14% of the right frame and 21% of the left frame.
+      key_finding_mount_body: >
+        That crisp low-variance object does not move by more than a few pixels
+        across the whole dataset, including left wrist_pitch swings of +-1.01 rad
+        (58 deg) and left wrist_roll swings of +-1.0 rad. It is therefore rigid
+        with the camera. A camera on <side>_wrist_roll_link (what the MJCF says)
+        has only that link's own 60 mm mesh rigid with it, which subtends under
+        2% of the frame at fovy 80 - an order of magnitude too little. The object
+        is the Dex3 palm, whose mesh hangs off <side>_wrist_yaw_link. The camera
+        is bracketed to the HAND BASE, not to the forearm, which is consistent
+        with the bracket's own filename (g1-camera-mount-dex3-left.step) and with
+        the black bracket visible at the hand/forearm junction in the ego_view
+        frames. mount_body above is very likely wrong.
+      other_blockers:
+        - >
+          the real wrist stream has strong barrel distortion (measured.undistort
+          is false) and much of the self-geometry sits in the periphery, where a
+          MuJoCo pinhole cannot follow it even at the correct fovy.
+        - >
+          the right wrist joints move only ~21 deg over the whole dataset, so the
+          self-silhouette barely changes; the objective reduces to "put a blob of
+          the right area in the right place", which ~3 numbers can satisfy and
+          which cannot pin 3 angles plus fovy.
+      next_step: >
+        Measure the bracket pose directly (photograph the mount on the hand, or
+        supply the right-hand STEP and where it seats on the Dex3), or record a
+        short clip with a target rigidly fixed to the palm. Silhouette matching
+        alone will not close this.
+      verification_image: calib/verify_wrist_right_vs_real.png

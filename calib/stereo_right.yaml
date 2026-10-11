@@ -1,0 +1,76 @@
+model: pinhole
+topic: stereo/right
+image_width: 768
+image_height: 432
+K:
+- - 428.19108324066576
+  - 0.0
+  - 379.7647792566624
+- - 0.0
+  - 428.19108324066576
+  - 221.93509271225196
+- - 0.0
+  - 0.0
+  - 1.0
+D:
+- -0.34372924
+- 0.13852567
+- 0.0
+- 0.0
+- 0.0
+rms_px: 0.3493
+n_views: 29
+focal_std_px: 1.28
+source: opencv_interactive-calibration on the published zmq stream, via scripts/realsim/zmq_to_v4l2.py
+calibrated: Thu 24 Sep 2026 12:25:19 PM IST
+board: 8x6 inner corners, taped flat to rigid card
+sim_camera:
+  published_resolution:
+  - 768
+  - 432
+  output_resolution:
+  - 640
+  - 480
+  fovy_deg: 53.537
+  fovx_deg: 83.771
+  f_px_published: 428.19
+  fx_out: 356.83
+  fy_out: 475.77
+  cx_out: 316.47
+  cy_out: 246.59
+  measured_fps: 15.0
+  note: MuJoCo has square pixels and one fovy, so it cannot render output_resolution
+    directly with both field angles right. Render at published_resolution and cv2.resize,
+    the way the real VLA client does.
+validation:
+  checks:
+  - check: reprojection error
+    value: 0.349 px
+    verdict: PASS
+  - check: focal uncertainty
+    value: +-1.28 px (0.3%)
+    verdict: PASS
+  - check: fy/fx vs predicted 1.0000
+    value: 1.0000 (+0.0%)
+    verdict: PASS
+  - check: principal point offset
+    value: (-4.2, +5.9) px
+    verdict: PASS
+  - check: distortion magnitude
+    value: max|D| = 0.344
+    verdict: PASS
+  - check: frames used
+    value: '29'
+    verdict: PASS
+  uncertainty_note: focal_std_px is calibrateCamera's linearised estimate. It assumes
+    the views are independent; a hand-held board gives correlated poses, so it under-reports.
+    Trust runs_spread_f_px below, measured by repeating the calibration.
+  runs_f_px:
+  - 454.12
+  - 428.19
+  runs_spread_f_px:
+  - 428.19
+  - 454.12
+  runs_fovy_band_deg:
+  - 50.88
+  - 53.54

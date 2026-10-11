@@ -1,0 +1,764 @@
+diff --git a/decoupled_wbc/control/main/teleop/configs/configs.py b/decoupled_wbc/control/main/teleop/configs/configs.py
+index 6491086..20fba65 100644
+--- a/decoupled_wbc/control/main/teleop/configs/configs.py
++++ b/decoupled_wbc/control/main/teleop/configs/configs.py
+@@ -216,6 +216,12 @@ class BaseConfig(ArgsConfigTemplate):
+ class ControlLoopConfig(BaseConfig):
+     """Config for running the G1 control loop."""
+ 
++    smooth_hand_grasp: bool = True
++    """Rate-limit the right-hand grasp (Dex3, joints 36..42) to ~6 rad/s in the
++    control loop so the robot executes the smoothed command and the recorded
++    `action` label matches it (finger envelope ~4.7-9 rad/s). Disable with
++    --no-smooth_hand_grasp."""
++
+     pass
+ 
+ 
+@@ -282,6 +288,9 @@ class DataExporterConfig(BaseConfig, ComposedCameraClientConfig):
+     support_operator_username: Optional[str] = None
+     """Support operator username."""
+ 
++    camera_host: str = "192.168.123.164"
++    """Host IP of the ZMQ VLA camera server (overrides the localhost default)."""
++
+     robot_id: Optional[str] = None
+     """Robot ID."""
+ 
+@@ -294,8 +303,10 @@ class DataExporterConfig(BaseConfig, ComposedCameraClientConfig):
+     text_to_speech: bool = True
+     """Whether to use text-to-speech for voice feedback."""
+ 
+-    add_stereo_camera: bool = True
+-    """Whether to add stereo camera for data collection. If False, only use a signle ego view camera."""
++    add_stereo_camera: bool = False
++    """Whether to add the extra stereo-mono ego views. Kept False for the 3-camera
++    VLA setup (ego_view + ego_left + ego_right); the ZMQ client does not publish the
++    stereo-mono pair, so enabling this would require image keys that never arrive."""
+ 
+ 
+ @dataclass
+diff --git a/decoupled_wbc/control/main/teleop/configs/g1_29dof_gear_wbc.yaml b/decoupled_wbc/control/main/teleop/configs/g1_29dof_gear_wbc.yaml
+index e7c0363..0bd3387 100644
+--- a/decoupled_wbc/control/main/teleop/configs/g1_29dof_gear_wbc.yaml
++++ b/decoupled_wbc/control/main/teleop/configs/g1_29dof_gear_wbc.yaml
+@@ -5,7 +5,7 @@ ROBOT_TYPE: 'g1_29dof' # Robot name, "go2", "b2", "b2w", "h1", "go2w", "g1"
+ ROBOT_SCENE: "decoupled_wbc/control/robot_model/model_data/g1/scene_43dof.xml" # Robot scene, for Sim2Sim
+ # ROBOT_SCENE: "decoupled_wbc/control/robot_model/model_data/g1/scene_29dof_activated3dex.xml"
+ 
+-DOMAIN_ID: 0 # Domain id
++DOMAIN_ID: 99 # Domain id (real G1 = 0, sim = 99)
+ # Network Interface, "lo" for simulation and the one with "192.168.123.222" for real robot
+ # INTERFACE: "enxe8ea6a9c4e09"
+ # INTERFACE: "enxc8a3623c9cb7"
+diff --git a/decoupled_wbc/control/main/teleop/run_g1_control_loop.py b/decoupled_wbc/control/main/teleop/run_g1_control_loop.py
+index 2cec57f..da8ced6 100644
+--- a/decoupled_wbc/control/main/teleop/run_g1_control_loop.py
++++ b/decoupled_wbc/control/main/teleop/run_g1_control_loop.py
+@@ -19,6 +19,7 @@ from decoupled_wbc.control.policy.wbc_policy_factory import get_wbc_policy
+ from decoupled_wbc.control.robot_model.instantiation.g1 import (
+     instantiate_g1_robot_model,
+ )
++from decoupled_wbc.control.utils.hand_grasp_smoother import HandGraspSmoother
+ from decoupled_wbc.control.utils.keyboard_dispatcher import (
+     KeyboardDispatcher,
+     KeyboardEStop,
+@@ -68,6 +69,14 @@ def main(config: ControlLoopConfig):
+ 
+     wbc_policy = get_wbc_policy("g1", robot_model, wbc_config, config.upper_body_joint_speed)
+ 
++    hand_smoother = None
++    if config.smooth_hand_grasp:
++        hand_smoother = HandGraspSmoother(dt=1.0 / config.control_frequency)
++        print(
++            "Hand grasp smoothing ENABLED: right-hand joints (36..42) slew-limited "
++            "to the finger envelope (~6 rad/s) before execution and recording."
++        )
++
+     keyboard_listener_pub = KeyboardListenerPublisher()
+     keyboard_estop = KeyboardEStop()
+     if config.keyboard_dispatcher_type == "raw":
+@@ -126,6 +135,12 @@ def main(config: ControlLoopConfig):
+                 with telemetry.timer("policy_action"):
+                     wbc_action = wbc_policy.get_action(time=t_now)
+ 
++                # Smooth the right-hand grasp before it is both executed
++                # (env.queue_action below) and recorded (action publish), so the
++                # collected action label matches what the robot actually does.
++                if hand_smoother is not None:
++                    hand_smoother.smooth(wbc_action["q"])
++
+                 # Measure action queue time
+                 with telemetry.timer("queue_action"):
+                     env.queue_action(wbc_action)
+@@ -180,6 +195,11 @@ def main(config: ControlLoopConfig):
+                     }
+                     last_teleop_cmd = upper_body_cmd.copy()
+ 
++                    # Re-seed the grasp smoother from the measured hand pose so
++                    # the post-reset command has no artificial jump.
++                    if hand_smoother is not None:
++                        hand_smoother.reset(obs["q"])
++
+                     time.sleep(0.5)
+ 
+                 msg = deepcopy(obs)
+diff --git a/decoupled_wbc/control/main/teleop/run_g1_data_exporter.py b/decoupled_wbc/control/main/teleop/run_g1_data_exporter.py
+index aae1fe0..997c075 100644
+--- a/decoupled_wbc/control/main/teleop/run_g1_data_exporter.py
++++ b/decoupled_wbc/control/main/teleop/run_g1_data_exporter.py
+@@ -10,7 +10,7 @@ import tyro
+ from decoupled_wbc.control.main.constants import ROBOT_CONFIG_TOPIC, STATE_TOPIC_NAME
+ from decoupled_wbc.control.main.teleop.configs.configs import DataExporterConfig
+ from decoupled_wbc.control.robot_model.instantiation import g1
+-from decoupled_wbc.control.sensor.composed_camera import ComposedCameraClientSensor
++from decoupled_wbc.control.sensor.vla_image_client import VLA_DATA_TOPIC_MAP, VLAImageClient
+ from decoupled_wbc.control.utils.episode_state import EpisodeState
+ from decoupled_wbc.control.utils.keyboard_dispatcher import KeyboardListenerSubscriber
+ from decoupled_wbc.control.utils.ros_utils import ROSMsgSubscriber, ROSServiceClient
+@@ -98,12 +98,16 @@ class Gr00tDataCollector:
+         self._episode_state = EpisodeState()
+         self._keyboard_listener = KeyboardListenerSubscriber()
+         self._state_subscriber = ROSMsgSubscriber(state_topic_name)
+-        self._image_subscriber = ComposedCameraClientSensor(server_ip=camera_host, port=camera_port)
++        self._image_subscriber = VLAImageClient(
++            connect=f"tcp://{camera_host}:{camera_port}",
++            topic_map=VLA_DATA_TOPIC_MAP,
++        )
+         self.rate = self.node.create_rate(self.frequency)
+ 
+         self.obs_act_buffer = deque(maxlen=100)
+         self.latest_image_msg = None
+         self.latest_proprio_msg = None
++        self._last_wait_log = 0.0  # throttle the "waiting for message" diagnostic
+ 
+         self.state_polling_rate = 1 / state_act_msg_frequency
+         self.last_state_poll_time = time.monotonic()
+@@ -144,12 +148,35 @@ class Gr00tDataCollector:
+         t_start = time.monotonic()
+ 
+         if self.latest_proprio_msg is None or self.latest_image_msg is None:
+-            self._print_and_say(
+-                f"Waiting for message. "
+-                f"Avail msg: proprio {self.latest_proprio_msg is not None} | "
+-                f"image {self.latest_image_msg is not None}",
+-                say=False,
+-            )
++            # Throttle to ~1 Hz so the diagnostic doesn't flood the console.
++            now = time.monotonic()
++            if now - self._last_wait_log >= 1.0:
++                self._last_wait_log = now
++                img_detail = ""
++                # debug_status() may be absent if an older installed VLAImageClient
++                # shadows the repo copy -- degrade gracefully instead of crashing.
++                debug_status = getattr(self._image_subscriber, "debug_status", None)
++                if self.latest_image_msg is None and debug_status is not None:
++                    status = debug_status()
++                    if status["total_msgs"] == 0:
++                        img_detail = (
++                            " | NO ZMQ frames received -> camera server is not "
++                            "publishing or is unreachable at the configured "
++                            "camera_host:camera_port"
++                        )
++                    else:
++                        img_detail = (
++                            f" | received {status['total_msgs']} ZMQ msgs but still "
++                            f"waiting on cameras {status['missing_keys']}; "
++                            f"topics seen={status['seen_topics']} "
++                            f"expected={status['expected_topics']}"
++                        )
++                self._print_and_say(
++                    f"Waiting for message. "
++                    f"Avail msg: proprio {self.latest_proprio_msg is not None} | "
++                    f"image {self.latest_image_msg is not None}{img_detail}",
++                    say=False,
++                )
+             return False
+ 
+         if self._episode_state.get_state() == self._episode_state.RECORDING:
+@@ -333,7 +360,12 @@ def main(config: DataExporterConfig):
+ if __name__ == "__main__":
+     config = tyro.cli(DataExporterConfig)
+     config.task_prompt = input("Enter the task prompt: ").strip().lower()
++
+     add_to_existing_dataset = input("Add to existing dataset? (y/n): ").strip().lower()
++    while add_to_existing_dataset not in ("y", "n"):
++        add_to_existing_dataset = (
++            input("Please enter 'y' or 'n'. Add to existing dataset? (y/n): ").strip().lower()
++        )
+ 
+     if add_to_existing_dataset == "y":
+         config.dataset_name = input("Enter the dataset name: ").strip().lower()
+diff --git a/decoupled_wbc/control/sensor/vla_image_client.py b/decoupled_wbc/control/sensor/vla_image_client.py
+new file mode 100644
+index 0000000..b8d5d50
+--- /dev/null
++++ b/decoupled_wbc/control/sensor/vla_image_client.py
+@@ -0,0 +1,233 @@
++"""ZMQ camera client for VLA data collection.
++
++Connects to the camera ZMQ server, subscribes to the robot cameras, and exposes
++them under the data-collection naming convention, resized to 640x480 (WxH) and
++in RGB so they line up with the LeRobot training dataset.
++
++For data collection we only use three of the four published cameras:
++
++    Source topic  -> dataset image key
++    stereo/right  -> ego_view    (main ego view)
++    hand_left     -> ego_left    (left wrist)
++    hand_right    -> ego_right   (right wrist)
++
++(``stereo/left`` / ``cam_left_high`` is intentionally dropped.)
++
++Design note (real-time / 30fps):
++    The receive thread does NOT decode. It only drains the socket and keeps the
++    latest raw JPEG bytes per camera, which is very cheap and lets it keep up
++    with the publisher. Decoding + resizing happens lazily in read()/get(), so
++    only the frames actually fed to the policy get decoded -- not the whole
++    stream. This removes the single-thread decode bottleneck that caps fps when
++    the stereo (high) frames are large.
++"""
++
++from __future__ import annotations
++
++import json
++import threading
++import time
++from collections import defaultdict
++from typing import Any, Dict, Optional
++
++import cv2
++import numpy as np
++import zmq
++
++
++# Source topic (published by the server) -> dataset image key (matches the
++# feature names registered in decoupled_wbc.data.utils.get_dataset_features).
++VLA_DATA_TOPIC_MAP: Dict[str, str] = {
++    "stereo/right": "ego_view",   # main ego view  (cam_right_high)
++    "hand_left":    "ego_left",   # left wrist      (cam_left_wrist)
++    "hand_right":   "ego_right",  # right wrist     (cam_right_wrist)
++}
++
++# Resize every frame to (width, height). cv2.resize wants (W, H); the resulting
++# numpy array is (H, W, 3) -> (480, 640, 3), matching RS_VIEW_CAMERA_* dims.
++RESIZE_WIDTH = 640
++RESIZE_HEIGHT = 480
++RESIZE = (RESIZE_WIDTH, RESIZE_HEIGHT)
++
++
++class VLAImageClient:
++    """Subscriber that yields resized, renamed RGB frames for VLA data collection.
++
++    Keeps only the latest *raw JPEG* per camera (cheap receive thread) and
++    decodes on demand.
++
++    Args:
++        connect:   server address, e.g. ``tcp://192.168.123.164:5555``.
++        topic_map: source-topic -> dataset-key mapping (defaults to
++                   VLA_DATA_TOPIC_MAP).
++        resize:    (width, height) to resize to, or None to keep native size.
++        rgb:       if True (default) frames are RGB; otherwise BGR.
++        rcvhwm:    receive high-water mark (newest-frames buffer depth).
++    """
++
++    def __init__(
++        self,
++        connect: str,
++        topic_map: Dict[str, str] = VLA_DATA_TOPIC_MAP,
++        resize: Optional[tuple[int, int]] = RESIZE,
++        rgb: bool = True,
++        rcvhwm: int = 8,
++    ):
++        self._topic_map = dict(topic_map)
++        self._resize = resize
++        self._rgb = rgb
++
++        self._ctx = zmq.Context.instance()
++        self._sock = self._ctx.socket(zmq.SUB)
++        self._sock.connect(connect)
++        for src in self._topic_map:
++            self._sock.setsockopt_string(zmq.SUBSCRIBE, src)
++        # Only ever hold the latest frames; drop backlog for real-time use.
++        self._sock.setsockopt(zmq.RCVHWM, rcvhwm)
++
++        self._connect = connect
++        self._rcvhwm = rcvhwm
++        self._raw: Dict[str, bytes] = {}        # latest JPEG bytes, keyed by dataset key
++        self._meta: Dict[str, dict] = {}
++        self._recv_time: Dict[str, float] = {}  # wall-clock time the frame arrived
++        self._recv_counts: Dict[str, int] = defaultdict(int)
++        self._total_recv = 0                    # every msg off the socket, pre-filter
++        self._seen_topics: set = set()          # raw topic strings actually published
++        self._lock = threading.Lock()
++        self._stop = threading.Event()
++        self._thread = threading.Thread(target=self._loop, daemon=True)
++        self._thread.start()
++
++    def _resubscribe(self) -> None:
++        """Rebuild the SUB socket against the same endpoint.
++
++        A PUB that restarts is the common case here: the camera server is part
++        of a sim stack that gets torn down and brought back. TCP reconnects on
++        its own, so the socket looks healthy - ESTAB, thread polling - but the
++        subscriptions never re-register with the NEW publisher, and PUB silently
++        drops every frame for a subscriber that asked for nothing. Symptom: a
++        client that worked before the restart receives zero messages forever
++        while a freshly started one works instantly.
++        """
++        try:
++            self._sock.close(linger=0)
++        except Exception:
++            pass
++        self._sock = self._ctx.socket(zmq.SUB)
++        self._sock.connect(self._connect)
++        for src in self._topic_map:
++            self._sock.setsockopt_string(zmq.SUBSCRIBE, src)
++        self._sock.setsockopt(zmq.RCVHWM, self._rcvhwm)
++
++    def _loop(self) -> None:
++        # Hot path: just drain the socket and stash the newest raw bytes.
++        # No imdecode / resize here -> the thread keeps up with the publisher.
++        poller = zmq.Poller()
++        poller.register(self._sock, zmq.POLLIN)
++        idle = 0.0
++        while not self._stop.is_set():
++            if not dict(poller.poll(timeout=100)):
++                idle += 0.1
++                # Silence for this long means the publisher went away and came
++                # back without us. Rebuilding costs nothing when it is a genuine
++                # gap; it is the only thing that recovers a stale subscription.
++                if idle >= 5.0:
++                    idle = 0.0
++                    poller.unregister(self._sock)
++                    self._resubscribe()
++                    poller.register(self._sock, zmq.POLLIN)
++                continue
++            idle = 0.0
++            parts = self._sock.recv_multipart()
++            with self._lock:
++                self._total_recv += 1
++            # Expected wire format is [topic, meta, jpg]. A different part count
++            # means the server speaks another protocol (e.g. single-part msgpack)
++            # -- record it so debug_status() can surface the mismatch.
++            if len(parts) != 3:
++                with self._lock:
++                    self._seen_topics.add(f"<{len(parts)}-part message>")
++                continue
++            topic_b, meta_b, jpg = parts
++            topic = topic_b.decode("utf-8", errors="replace")
++            with self._lock:
++                self._seen_topics.add(topic)
++            key = self._topic_map.get(topic)
++            if key is None:
++                continue  # ignore depth / unmapped topics (e.g. stereo/left)
++            with self._lock:
++                self._raw[key] = jpg
++                self._meta[key] = json.loads(meta_b.decode("utf-8"))
++                self._recv_time[key] = time.time()
++                self._recv_counts[key] += 1
++
++    def _decode(self, jpg: bytes) -> Optional[np.ndarray]:
++        arr = np.frombuffer(jpg, dtype=np.uint8)
++        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
++        if frame is None:
++            return None
++        if self._resize is not None:
++            frame = cv2.resize(frame, self._resize, interpolation=cv2.INTER_AREA)
++        if self._rgb:
++            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
++        return frame
++
++    @property
++    def camera_names(self) -> list[str]:
++        """Dataset image keys in a stable order."""
++        return list(self._topic_map.values())
++
++    def get(self, key: str) -> Optional[np.ndarray]:
++        """Decode the latest frame for one camera, or None if not seen."""
++        with self._lock:
++            jpg = self._raw.get(key)
++        return None if jpg is None else self._decode(jpg)
++
++    def read(self, **kwargs) -> Optional[Dict[str, Any]]:
++        """Latest frame per camera in the data-exporter message format.
++
++        Returns ``{"images": {key: HxWx3 uint8 RGB}, "timestamps": {key: t}}``
++        once every camera has produced at least one frame, else ``None``. This
++        mirrors ComposedCameraClientSensor.read() so it is a drop-in image
++        source for the data exporter.
++        """
++        names = list(self._topic_map.values())
++        with self._lock:
++            if not all(n in self._raw for n in names):
++                return None
++            # bytes are immutable -> safe to decode outside the lock
++            raws = {n: self._raw[n] for n in names}
++            timestamps = {n: self._recv_time[n] for n in names}
++        images = {n: self._decode(j) for n, j in raws.items()}
++        return {"images": images, "timestamps": timestamps}
++
++    def debug_status(self) -> Dict[str, Any]:
++        """Snapshot for diagnosing why frames aren't arriving.
++
++        - ``total_msgs`` 0 -> nothing on the socket: server down / wrong
++          host:port / firewall.
++        - ``total_msgs`` > 0 but ``missing_keys`` non-empty -> the server is
++          publishing, but not (all of) the topics this client expects. Compare
++          ``seen_topics`` against ``expected_topics`` to spot a name mismatch or
++          a camera that isn't streaming.
++        """
++        with self._lock:
++            return {
++                "total_msgs": self._total_recv,
++                "seen_topics": sorted(self._seen_topics),
++                "expected_topics": sorted(self._topic_map.keys()),
++                "received_keys": sorted(self._raw.keys()),
++                "missing_keys": [k for k in self._topic_map.values() if k not in self._raw],
++            }
++
++    def pop_counts(self) -> Dict[str, int]:
++        """Snapshot + reset per-camera received-frame counters (= server rate)."""
++        with self._lock:
++            c = dict(self._recv_counts)
++            self._recv_counts.clear()
++            return c
++
++    def close(self) -> None:
++        self._stop.set()
++        self._thread.join(timeout=1.0)
++        self._sock.close(linger=0)
+diff --git a/decoupled_wbc/control/utils/hand_grasp_smoother.py b/decoupled_wbc/control/utils/hand_grasp_smoother.py
+new file mode 100644
+index 0000000..74664bb
+--- /dev/null
++++ b/decoupled_wbc/control/utils/hand_grasp_smoother.py
+@@ -0,0 +1,250 @@
++"""
++Online causal smoothing of the right-hand grasp at data-collection time.
++
++Port of the offline v5/v6 grasp smoother (Melvin_ws/scripts/smooth_bang_bang_v5.py,
++Melvin_ws/apply_v6_smoothing.py) into the live control loop, so the smoothing
++happens where the data is created instead of as post-hoc label surgery:
++
++  * the robot executes the smoothed hand command
++      -> measured observation.state is REAL and naturally consistent (no offline
++         servo-model regeneration needed), and
++  * the recorded `action` label is the same smoothed command the robot executed
++      -> no train/deploy distribution shift.
++
++Only the right-hand joints (36..42, Dex3) are touched. The per-joint limits are
++v5's DMAX (rad/tick @ 20 Hz) expressed as a max velocity in rad/s:
++
++    DMAX = {36:0.30, 37:0.30, 38:0.30, 39:0.30, 40:0.20, 41:0.25, 42:0.25} rad/tick
++    -> {36:6.0, 37:6.0, 38:6.0, 39:6.0, 40:4.0, 41:5.0, 42:5.0} rad/s
++
++which sits inside the measured finger envelope (~4.7-9 rad/s).
++
++Profile generator: instead of the offline corner-rounding (zero-phase gaussian,
++Savitzky-Golay), which is non-causal and cannot run online, each hand joint runs
++a jerk-limited (S-curve) motion profile with provable bounds:
++
++    max velocity  = per-joint DMAX above
++    max accel     = 30 rad/s^2
++    max jerk      = 300 rad/s^3
++
++Every control tick the profile is replanned from the current (q, v, a) state to
++the latest target ("reflex" replanning), which makes it naturally handle moving
++targets and direction reversals without ever looking ahead. A hard per-tick slew
++clamp (|dq| <= DMAX*dt) is kept as a backstop.
++
++Trade-off vs the previous slew+EMA version: accel/decel ramps add a little time
++to a full close (~0.5 s for 1.5 rad vs ~0.25 s) in exchange for bounded jerk.
++"""
++
++import numpy as np
++
++RIGHT_HAND_JOINTS = np.arange(36, 43)
++DMAX_RADPS = np.array([6.0, 6.0, 6.0, 6.0, 4.0, 5.0, 5.0])
++
++
++class HandGraspSmoother:
++    """Per-joint jerk-limited S-curve profile for the right-hand grasp.
++
++    Stateful: must be called once per control tick with the full 43-dim joint
++    target (or any array whose indices 36..42 are the right-hand joints). Smooths
++    the hand joints in place and returns the same array.
++
++    Each joint keeps its own scalar trajectory state (q, v, a). Per tick:
++
++      1. target error d = target - q is read (may move arbitrarily; teleop).
++      2. a stopping-feasibility check decides whether to accelerate toward the
++         target or to start/continue the maximum-jerk deceleration, such that the
++         joint stops exactly at the target (reflex replan -> time-optimal and
++         jerk-bounded S-curve, no overshoot for a fixed target).
++      3. q is integrated with the commanded accel, velocity-clamped to the
++         per-joint DMAX, and a hard slew backstop clips the per-tick step.
++    """
++
++    def __init__(
++        self,
++        dt: float,
++        dmax_radps=DMAX_RADPS,
++        max_acc: float = 30.0,
++        max_jerk: float = 300.0,
++        d_tol: float = 1e-3,
++        v_tol: float = 0.02,
++        max_stop_iters: int = 400,
++    ):
++        self.dt = float(dt)
++        self.dmax_radps = np.asarray(dmax_radps, dtype=float)
++        if self.dmax_radps.shape != (7,):
++            raise ValueError("dmax_radps must have 7 entries (right-hand joints 36..42)")
++        self.v_max = self.dmax_radps.copy()
++        self.a_max = float(max_acc)
++        self.j_max = float(max_jerk)
++        self.d_tol = float(d_tol)
++        self.v_tol = float(v_tol)
++        self.max_stop_iters = int(max_stop_iters)
++        self._q = None
++        self._v = None
++        self._a = None
++
++    def reset(self, q: np.ndarray) -> None:
++        """Re-seed the profile state from a measured/desired hand q (no initial jump)."""
++        q = np.asarray(q, dtype=float)
++        self._q = q[RIGHT_HAND_JOINTS].copy()
++        self._v = np.zeros(7)
++        self._a = np.zeros(7)
++
++    def _stop_dist(self, v: np.ndarray, a: np.ndarray) -> np.ndarray:
++        """Distance covered while stopping from (v, a) at max jerk then max accel.
++
++        Simulates the exact same discrete integration the main loop will execute,
++        so the feasibility check is self-consistent with the executed trajectory.
++        Works on the speed |v| with the accel component along the direction of
++        motion (a*sign(v)), so it is sign-correct for both travel directions and
++        always accumulates non-negative distances. Returns >= 0 for each joint;
++        joints with |v| <= v_tol contribute 0.
++        """
++        s = np.zeros(7)
++        vv = np.abs(v)
++        aa = a * np.sign(v)
++        done = np.zeros(7, dtype=bool)
++        for _ in range(self.max_stop_iters):
++            active = (~done) & (vv > self.v_tol)
++            if not active.any():
++                break
++            a_next = np.clip(aa - self.j_max * self.dt, -self.a_max, self.a_max)
++            v_next = vv + a_next * self.dt
++            crosses = active & (v_next <= 0.0) & (a_next < -1e-12)
++            if crosses.any():
++                t_stop = np.zeros(7)
++                t_stop[crosses] = -vv[crosses] / a_next[crosses]
++                s[crosses] += vv[crosses] * t_stop[crosses] + 0.5 * a_next[crosses] * t_stop[crosses] ** 2
++            keep = active & ~crosses
++            s[keep] += vv[keep] * self.dt + 0.5 * a_next[keep] * self.dt ** 2
++            upd = active & ~crosses
++            vv = np.where(upd, v_next, vv)
++            aa = np.where(upd, a_next, aa)
++            done |= active & crosses
++        return np.maximum(s, 0.0)
++
++    def smooth(self, q: np.ndarray) -> np.ndarray:
++        """Advance the jerk-limited S-curve one tick and write the hand joints of `q`."""
++        q = np.asarray(q, dtype=float)
++        if self._q is None:
++            self.reset(q)
++            return q
++
++        target = q[RIGHT_HAND_JOINTS]
++        v = self._v
++        a = self._a
++        q_prev = self._q
++
++        d = target - q_prev
++        d_abs = np.abs(d)
++        v_abs = np.abs(v)
++
++        settle = (d_abs <= self.d_tol) & (v_abs <= self.v_tol)
++        moving = v_abs > self.v_tol
++        at_target = d_abs <= self.d_tol
++        toward = d * v > 0.0
++
++        # Greedy one-tick feasibility: pick j in {+J, 0, -J} so that the state
++        # left after this tick is still inside the reachable set, i.e. its max-
++        # jerk stopping distance fits in the distance that remains after this
++        # tick's travel. The reachable set certificate is _stop_dist(v, a) <= d,
++        # and since the certificate is re-checked every tick, any trajectory that
++        # stays feasible provably reaches the target (no overshoot, no reliance
++        # on the arrival guard).
++        dir_toward = np.where(d >= 0.0, 1.0, -1.0)
++
++        # Arrival speed bound: if a candidate reaches the target this tick, the
++        # position guard below will zero the remaining velocity in a single tick
++        # (stored a = -v/dt, jerk = -v/dt^2), so arriving at more than v_arr
++        # would exceed the jerk limit. Reject fast landing steps; this forces the
++        # profile to slow to <= v_arr before the final approach.
++        v_arr = self.j_max * self.dt ** 2
++        land_eps = self.d_tol * 1e-3
++
++        a_acc = np.clip(a + dir_toward * self.j_max * self.dt, -self.a_max, self.a_max)
++        v_acc = np.clip(v + a_acc * self.dt, -self.v_max, self.v_max)
++        rem_acc = d_abs - np.abs(v_acc) * self.dt
++        accel_ok = ((rem_acc <= land_eps) & (np.abs(v_acc) <= v_arr)) | \
++                   (self._stop_dist(v_acc, a_acc) <= rem_acc)
++
++        v_hold = np.clip(v + a * self.dt, -self.v_max, self.v_max)
++        rem_hold = d_abs - np.abs(v_hold) * self.dt
++        hold_ok = ((rem_hold <= land_eps) & (np.abs(v_hold) <= v_arr)) | \
++                  (self._stop_dist(v_hold, a) <= rem_hold)
++
++        # Decelerate only when neither accelerating nor holding keeps us feasible;
++        # this is what sheds the accel at exactly the right moment. Once engaged,
++        # the decel command tracks the exact-landing law a_target = -v^2/(2d)
++        # (jerk-limited ramp) instead of bang-bang max braking: max braking from
++        # the latest-feasible switch point always over-brakes the low-speed tail,
++        # stranding the joint short of the target and then re-creeping (each
++        # transition a jerk spike). The landing law returns a to ~0 as v and d
++        # shrink together, so the profile ends at v ~= 0 exactly on the target.
++        decel = moving & (~accel_ok) & (~hold_ok)
++        decel |= moving & at_target
++        hold = moving & (~accel_ok) & hold_ok & (~at_target)
++        accel = accel_ok & (~at_target)
++
++        a_land = -dir_toward * np.minimum(
++            v_abs * v_abs / (2.0 * np.maximum(d_abs, self.d_tol)), self.a_max)
++        a_cmd = np.zeros(7)
++        a_cmd = np.where(accel, a + dir_toward * self.j_max * self.dt, a_cmd)
++        a_cmd = np.where(decel, a + np.clip(a_land - a, -self.j_max * self.dt,
++                                            self.j_max * self.dt), a_cmd)
++        a_cmd = np.where(hold, a, a_cmd)
++
++        # Bleed leftover accel: if the joint stopped short of the target with a
++        # deep accel still stored (v=0, d>d_tol), ramp it toward 0 at max jerk
++        # instead of letting a_cmd fall to 0 (which would be a jerk spike). The
++        # direction guard below keeps position pinned while the accel bleeds.
++        stopped_short = (v_abs <= self.v_tol) & (d_abs > self.d_tol) & \
++                        (np.abs(a) > self.j_max * self.dt)
++        a_cmd = np.where(stopped_short, a - np.sign(a) * self.j_max * self.dt, a_cmd)
++
++        # Settle at the target: pin v to 0 so the trajectory goes flat. No accel
++        # "bleed" here (a nonzero command while v ~= 0 would push q away from the
++        # target); any leftover accel is simply dropped since only q is recorded.
++        a_settle = np.clip(-v / self.dt, -self.a_max, self.a_max)
++        a_cmd = np.where(settle, a_settle, a_cmd)
++
++        # Integrate. Ease off accel as v approaches the per-joint ceiling so a
++        # returns to 0 exactly as v reaches v_max (jerk-bounded: a is shed at
++        # max jerk J, which from a=A takes A/J s and gains A^2/(2J) of velocity,
++        # so the shed starts at v_max - a^2/(2J)). A hard proportional cap on a
++        # would otherwise produce jerk up to a/dt at the start of cruise.
++        a_cmd = np.where(
++            (~decel) & (v_abs >= self.v_max - a * a / (2.0 * self.j_max)) & (a * dir_toward > 0.0),
++            a - dir_toward * self.j_max * self.dt,
++            a_cmd,
++        )
++        a_lim = a_cmd.copy()
++        a_lim = np.where(a_cmd > 0.0, np.minimum(a_lim, (self.v_max - v) / self.dt), a_lim)
++        a_lim = np.where(a_cmd < 0.0, np.maximum(a_lim, (-self.v_max - v) / self.dt), a_lim)
++        a_lim = np.clip(a_lim, -self.a_max, self.a_max)
++
++        v_cmd = v + a_lim * self.dt
++        v_cmd = np.clip(v_cmd, -self.v_max, self.v_max)
++
++        # Arrival guards: never step past the current target, and never let an
++        # over-aggressive command push velocity through zero while the joint is
++        # still approaching (this is what used to cause arrival overshoot/ring).
++        pos = d >= 0.0
++        neg = d < 0.0
++        v_cmd = np.where(pos, np.minimum(v_cmd, d / self.dt), v_cmd)
++        v_cmd = np.where(neg, np.maximum(v_cmd, d / self.dt), v_cmd)
++        v_cmd = np.where(pos & (v >= 0.0), np.maximum(v_cmd, 0.0), v_cmd)
++        v_cmd = np.where(neg & (v <= 0.0), np.minimum(v_cmd, 0.0), v_cmd)
++
++        q_cmd = q_prev + v_cmd * self.dt
++
++        # Hard slew backstop: never step more than DMAX*dt per tick.
++        q_cmd = np.clip(q_cmd, q_prev - self.dmax_radps * self.dt,
++                        q_prev + self.dmax_radps * self.dt)
++
++        v_cmd = (q_cmd - q_prev) / self.dt
++        self._q = q_cmd
++        self._v = v_cmd
++        self._a = (v_cmd - v) / self.dt
++        q[RIGHT_HAND_JOINTS] = q_cmd
++        return q
+diff --git a/decoupled_wbc/scripts/zmq_probe.py b/decoupled_wbc/scripts/zmq_probe.py
+new file mode 100644
+index 0000000..4f5a7ce
+--- /dev/null
++++ b/decoupled_wbc/scripts/zmq_probe.py
+@@ -0,0 +1,72 @@
++"""Diagnose a camera ZMQ server: subscribe to EVERYTHING and report what arrives.
++
++Unlike the VLA clients, this subscribes to the empty prefix ("" = all topics),
++so it sees traffic regardless of topic name or wire format. Use it to tell
++apart the three failure modes behind a stuck "image False":
++
++    * 0 messages          -> server down / wrong host:port / firewall
++    * messages, but the topic names differ from what the client expects
++    * messages arrive as a single part (msgpack) -> different server protocol
++
++Usage:
++    python zmq_probe.py --connect tcp://192.168.123.164:5555 --seconds 5
++"""
++
++import argparse
++import time
++from collections import Counter
++
++import zmq
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--connect", default="tcp://192.168.123.164:5555")
++    ap.add_argument("--seconds", type=float, default=5.0)
++    args = ap.parse_args()
++
++    ctx = zmq.Context.instance()
++    sock = ctx.socket(zmq.SUB)
++    sock.connect(args.connect)
++    sock.setsockopt_string(zmq.SUBSCRIBE, "")  # receive every topic
++
++    poller = zmq.Poller()
++    poller.register(sock, zmq.POLLIN)
++
++    print(f"[probe] listening on {args.connect} for {args.seconds:.0f}s ...")
++    total = 0
++    part_counts = Counter()   # how many frames each message had
++    topics = Counter()        # first-frame value (topic) for multipart messages
++    deadline = time.time() + args.seconds
++
++    while time.time() < deadline:
++        if not dict(poller.poll(timeout=200)):
++            continue
++        parts = sock.recv_multipart()
++        total += 1
++        part_counts[len(parts)] += 1
++        if len(parts) >= 2:
++            try:
++                topics[parts[0].decode("utf-8")] += 1
++            except UnicodeDecodeError:
++                topics["<non-utf8 first frame>"] += 1
++
++    print(f"[probe] total messages: {total}")
++    if total == 0:
++        print("[probe] NOTHING received -> server not publishing or unreachable.")
++        print("        Check the server is running and `nc -zv <host> <port>` succeeds.")
++    else:
++        print(f"[probe] message shapes (frames -> count): {dict(part_counts)}")
++        if topics:
++            print(f"[probe] topics seen (topic -> count): {dict(topics)}")
++            print("        Compare these against the client's expected topics:")
++            print("        stereo/right, hand_left, hand_right")
++        else:
++            print("[probe] single-part messages (no topic frame) -> this is NOT the")
++            print("        multipart [topic, meta, jpg] server the exporter expects.")
++
++    sock.close(linger=0)
++
++
++if __name__ == "__main__":
++    main()

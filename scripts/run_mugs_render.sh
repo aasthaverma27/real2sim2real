@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# MuGS GaussianSensor render of a RoboSnap scene. Same environment contract as
-# run_hybrid_render.sh: gsplat JIT-compiles CUDA kernels on first use, so the
-# conda toolchain has to be on PATH (system gcc fails on conda's sysroot
-# headers, and nvcc must be the conda wrapper that can find cicc).
+# Offline MuGS render of a built scene to images / video (no robot stack).
+# gsplat JIT-compiles CUDA kernels on first use, so the conda toolchain has to
+# be on PATH (system gcc fails on conda's sysroot headers, and nvcc must be the
+# conda wrapper that can find cicc).
+#
+#   bash scripts/run_mugs_render.sh --scene-dir outputs/myroom
 set -euo pipefail
-ROOT="${ROBOSNAP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-A=${RS_ENV_ASSET:-/mnt/ssd2/conda/envs/robosnap-asset}          # supplies CUDA 12.8 + gcc 12.4
-SIM=${RS_ENV_SIM:-/mnt/ssd2/conda/envs/robosnap-sim}          # has mujoco + gsplat
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/_bootstrap.sh" || exit 1
+A="${RS_ENV_ASSET:-$(dirname "$(dirname "$RS_PY_ASSET")")}"   # supplies CUDA 12.8 + gcc 12.4
+SIM="${RS_ENV_SIM:-$(dirname "$(dirname "$RS_PY_SIM")")}"     # has mujoco + gsplat
 export CUDA_HOME="$A"
 export PATH="$A/bin:$PATH"
 export CC="$A/bin/x86_64-conda-linux-gnu-gcc"

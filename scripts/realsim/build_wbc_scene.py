@@ -21,7 +21,7 @@ Robot-agnostic: every robot-specific value comes from the descriptor
 (configs/robots/*.yaml), so a different robot is a different --robot, not a
 different script.
 
-    scripts/realsim/build_wbc_scene.py --scene-dir outputs/g1_ok \
+    scripts/realsim/build_wbc_scene.py --scene-dir outputs/myroom \
         --robot g1_29dof_with_hand --at -0.02 1.37 --yaw -1.62
 """
 from __future__ import annotations

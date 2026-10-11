@@ -42,6 +42,7 @@ def main() -> int:
     sub = ctx.socket(zmq.SUB)
     sub.connect(f"{a.connect}:{a.port}")
     sides = ["left", "right"] if a.side == "both" else [a.side]
+    proj = "rectilinear"      # overwritten by the stream header
     for s in sides:
         sub.setsockopt(zmq.SUBSCRIBE, f"elp/{s}".encode())
     sub.setsockopt(zmq.RCVTIMEO, int(a.timeout * 1000))
@@ -52,7 +53,9 @@ def main() -> int:
     wins = {}
     if not a.no_window:
         for s in sides:
-            w = f"ELP fisheye - {s} lens"
+            # the publisher states its projection in the stream header,
+            # so the window says what it is actually showing
+            w = f"ELP {proj} - {s} lens"
             cv2.namedWindow(w, cv2.WINDOW_NORMAL)
             pos = a.pos_left if s == "left" else a.pos_right
             cv2.moveWindow(w, pos[0], pos[1])
@@ -79,6 +82,7 @@ def main() -> int:
                 img = np.frombuffer(payload, np.uint8).reshape(h["height"], h["width"], 3)
             if first:
                 print(f"[sub] stream info: {json.dumps({k: v for k, v in h.items() if k not in ('side','frame_id','stamp_ns','nbytes')})}")
+                proj = h.get("projection", proj)
                 first = False
             stamps[side] = (h["frame_id"], h["stamp_ns"])
             if len(stamps) == 2:

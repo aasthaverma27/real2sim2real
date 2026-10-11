@@ -17,19 +17,7 @@
 	path = third_party/Hunyuan3D-Part
 	url = https://github.com/robosnap/Hunyuan3D-Part.git
 	branch = main
-[submodule "external/Isaac-GR00T"]
-	path = external/Isaac-GR00T
-	url = https://github.com/NVIDIA/Isaac-GR00T.git
-	branch = main
-[submodule "external/unitree_sdk2_python"]
-	path = external/unitree_sdk2_python
-	url = https://github.com/unitreerobotics/unitree_sdk2_python.git
-	branch = master
-[submodule "external/vla_for_simulation_testing"]
-	path = external/vla_for_simulation_testing
-	url = https://github.com/MethdAI-Modinoid/vla_for_simulation_testing.git
-	branch = main
-[submodule "external/simple_wbc_code"]
-	path = external/simple_wbc_code
-	url = https://github.com/rahul-2137-ai/simple_wbc_code.git
+[submodule "external/GR00T-WholeBodyControl"]
+	path = external/GR00T-WholeBodyControl
+	url = https://github.com/NVlabs/GR00T-WholeBodyControl.git
 	branch = main

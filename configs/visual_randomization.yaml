@@ -1,0 +1,93 @@
+# Visual domain randomization - the frozen ranges.
+#
+# Read by scripts/realsim/visual_randomizer.py in every photoreal renderer.
+# One sample per episode (per reset), drawn from the seed the sim broadcasts,
+# so every camera and window shows the same look and any episode can be
+# re-derived from its seed. Seed 0 = the nominal scene.
+#
+# Visual only. Nothing here moves, resizes or re-weights anything, so physics -
+# and every recorded trajectory - is the same under every look. Object
+# POSITIONS are randomized separately (scripts/realsim/randomize_objects.py).
+#
+# Nominal values of a scene built by scripts/build_sim_scene.sh:
+#   light 0  directional, straight down, diffuse 0.7
+#   light 1  spot at (1, -1, 2.5), diffuse 0.3, cutoff 45
+#   headlight ambient 0.1, diffuse 0.4
+#   table / apple / basket: rgba 1, specular 0.1, shininess 0.1
+
+# Fraction of episodes kept at the nominal look. 0 = every recorded episode
+# gets a randomized look (the nominal scene only shows before the first reset).
+nominal_prob: 0.0
+
+# Resample if key + spot + headlight diffuse falls outside this band. Nominal
+# is 0.7 + 0.3 + 0.4 = 1.4; this keeps scenes neither black nor washed out,
+# and the meshes from drifting too far from the splat's baked lighting.
+brightness_guard: [0.8, 2.2]
+
+# Body whose top centre every light aims at.
+aim_body: table
+
+# Per-channel multiplier on each light's colour: warm (~3000 K) to cool (~6500 K).
+color_tint: [0.85, 1.15]
+
+key_light:                  # light 0 - sets shadow direction and length
+  elevation_deg: [40, 85]   # above horizontal; 90 = the current straight-down
+  azimuth_deg: [0, 360]
+  diffuse: [0.4, 1.0]
+  ambient: [0.0, 0.15]
+  specular: [0.1, 0.5]
+
+spot_light:                 # light 1 - always aimed at the table
+  offset_xy_m: 0.6          # +- around the table centre
+  height_m: [1.8, 3.0]      # above the table top
+  diffuse: [0.0, 0.6]
+  ambient: [0.0, 0.15]
+  specular: [0.1, 0.5]
+  cutoff_deg: [30, 70]
+  castshadow_prob: 0.5
+
+headlight:                  # follows the camera; acts as the fill light
+  ambient: [0.05, 0.25]
+  diffuse: [0.2, 0.5]
+
+materials:                  # rgb multiplies the texture; match = name substring
+  table:
+    match: table
+    brightness: [0.7, 1.3]
+    channel_jitter: 0.10
+    specular: [0.0, 0.4]
+    shininess: [0.0, 0.6]
+  apple:                    # must stay red - the task names it
+    match: apple
+    brightness: [0.8, 1.15]
+    channel_jitter: 0.08
+    specular: [0.1, 0.6]
+    shininess: [0.2, 0.8]
+  basket:                   # must stay brown - the task names it
+    match: basket
+    brightness: [0.8, 1.2]
+    channel_jitter: 0.08
+    specular: [0.0, 0.2]
+    shininess: [0.0, 0.2]
+
+# Robot colours are NOT randomized: the robot keeps its real white shells and
+# black parts in every episode. (Randomizing its greys under a warm light made
+# the white shells read as pink.) To bring it back, list buckets here, e.g.
+#   - {nominal: 0.7, range: [0.55, 0.85]}
+robot_grey: []
+
+# Optional texture swaps. Drop .png/.jpg files in the pool directory to enable;
+# an empty or missing directory just disables the swap (logged at startup).
+textures:
+  table:
+    match: table
+    pool: assets/textures/table
+    prob: 0.5
+
+# Colour jitter on the splat background (the room). Its lighting is baked in,
+# so without this the room is identical in every episode.
+background:
+  brightness: [0.85, 1.15]
+  contrast: [0.85, 1.15]
+  saturation: [0.85, 1.15]
+  channel_gain: [0.95, 1.05]

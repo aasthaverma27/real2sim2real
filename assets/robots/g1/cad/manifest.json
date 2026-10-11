@@ -1,0 +1,128 @@
+[
+  {
+    "mesh": "cad_g1_camera_ring_dex3_v1_1",
+    "file": "cad_g1_camera_ring_dex3_v1_1.stl",
+    "link": "left_wrist_yaw_link",
+    "tris": 15658,
+    "part": "g1-camera-ring-dex3 v1"
+  },
+  {
+    "mesh": "cad_g1_camera_ring_dex3_v1_2",
+    "file": "cad_g1_camera_ring_dex3_v1_2.stl",
+    "link": "right_wrist_yaw_link",
+    "tris": 15610,
+    "part": "g1-camera-ring-dex3 v1"
+  },
+  {
+    "mesh": "cad_g1_camera_mount_dex3_left_v1_3",
+    "file": "cad_g1_camera_mount_dex3_left_v1_3.stl",
+    "link": "left_wrist_yaw_link",
+    "tris": 8644,
+    "part": "g1-camera-mount-dex3-left v1"
+  },
+  {
+    "mesh": "cad_g1_camera_mount_dex3_right_v1_4",
+    "file": "cad_g1_camera_mount_dex3_right_v1_4.stl",
+    "link": "right_wrist_yaw_link",
+    "tris": 11338,
+    "part": "g1-camera-mount-dex3-right v1"
+  },
+  {
+    "mesh": "cad_solid5_5",
+    "file": "cad_solid5_5.stl",
+    "link": "right_wrist_yaw_link",
+    "tris": 758,
+    "part": "solid5"
+  },
+  {
+    "mesh": "cad_solid6_6",
+    "file": "cad_solid6_6.stl",
+    "link": "right_wrist_yaw_link",
+    "tris": 36,
+    "part": "solid6"
+  },
+  {
+    "mesh": "cad_solid7_7",
+    "file": "cad_solid7_7.stl",
+    "link": "right_wrist_yaw_link",
+    "tris": 774,
+    "part": "solid7"
+  },
+  {
+    "mesh": "cad_solid8_8",
+    "file": "cad_solid8_8.stl",
+    "link": "right_wrist_yaw_link",
+    "tris": 76,
+    "part": "solid8"
+  },
+  {
+    "mesh": "cad_solid9_9",
+    "file": "cad_solid9_9.stl",
+    "link": "left_wrist_yaw_link",
+    "tris": 752,
+    "part": "solid9"
+  },
+  {
+    "mesh": "cad_solid10_10",
+    "file": "cad_solid10_10.stl",
+    "link": "left_wrist_yaw_link",
+    "tris": 36,
+    "part": "solid10"
+  },
+  {
+    "mesh": "cad_solid11_11",
+    "file": "cad_solid11_11.stl",
+    "link": "left_wrist_yaw_link",
+    "tris": 776,
+    "part": "solid11"
+  },
+  {
+    "mesh": "cad_solid12_12",
+    "file": "cad_solid12_12.stl",
+    "link": "left_wrist_yaw_link",
+    "tris": 76,
+    "part": "solid12"
+  },
+  {
+    "mesh": "cad_solid13_13",
+    "file": "cad_solid13_13.stl",
+    "link": "torso_link",
+    "tris": 296,
+    "part": "solid13"
+  },
+  {
+    "mesh": "cad_solid14_14",
+    "file": "cad_solid14_14.stl",
+    "link": "torso_link",
+    "tris": 296,
+    "part": "solid14"
+  },
+  {
+    "mesh": "cad_solid15_15",
+    "file": "cad_solid15_15.stl",
+    "link": "torso_link",
+    "tris": 296,
+    "part": "solid15"
+  },
+  {
+    "mesh": "cad_configuration_1_v3_16",
+    "file": "cad_configuration_1_v3_16.stl",
+    "link": "torso_link",
+    "tris": 61754,
+    "part": "Configuration 1 v3"
+  },
+  {
+    "mesh": "cad_height_adjusting_mount_v6_17",
+    "file": "cad_height_adjusting_mount_v6_17.stl",
+    "link": "torso_link",
+    "tris": 14102,
+    "part": "Height adjusting mount v6"
+  },
+  {
+    "mesh": "cad_head_cam_mount_v5_18",
+    "file": "cad_head_cam_mount_v5_18.stl",
+    "link": "torso_link",
+    "tris": 14064,
+    "part": "Head cam mount v5"
+  }
+]

@@ -30,7 +30,8 @@ import mujoco
 import numpy as np
 
 GEAR_G1 = Path(os.environ.get(
-    "RS_DEPLOY_ROOT", "/mnt/ssd2/vla_for_simulation_testing")
+    "RS_DEPLOY_ROOT",
+    Path(__file__).resolve().parents[1] / "external" / "GR00T-WholeBodyControl")
 ) / "gear_sonic/data/robot_model/model_data/g1/g1_29dof_with_hand.xml"
 ASSET_SUFFIXES = ("*.STL", "*.stl", "*.obj", "*.msh", "*.png", "*.jpg", "*.mtl")
 

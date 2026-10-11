@@ -42,8 +42,15 @@ import torch
 import torch.nn.functional as F
 
 
-def load_colmap(sparse_dir: Path, image_dir: Path, long_side: int):
-    """Return (images uint8 NHWC, w2c Nx4x4, K 3x3, points xyz, points rgb)."""
+def load_colmap(sparse_dir: Path, image_dir: Path, long_side: int,
+                mask_dir: Path | None = None):
+    """Return (images uint8 NHWC, w2c Nx4x4, K 3x3, points xyz, points rgb, names,
+    masks uint8 NHW or None).
+
+    A mask is white where an object should be ignored. It goes through the same
+    undistortion and resize as its image - a mask that is merely resized is off
+    by the distortion, which at the frame corner is about 8 px.
+    """
     import cv2
     import pycolmap
 
@@ -82,7 +89,8 @@ def load_colmap(sparse_dir: Path, image_dir: Path, long_side: int):
     K[0] *= W / cam.width
     K[1] *= H / cam.height
 
-    imgs, w2cs, names = [], [], []
+    imgs, w2cs, names, masks = [], [], [], ([] if mask_dir else None)
+    missing_masks = 0
     for img in sorted(rec.images.values(), key=lambda i: i.name):
         path = image_dir / img.name
         raw = cv2.imread(str(path))
@@ -91,6 +99,16 @@ def load_colmap(sparse_dir: Path, image_dir: Path, long_side: int):
         und = cv2.remap(raw, map1, map2, cv2.INTER_LINEAR)
         imgs.append(cv2.cvtColor(cv2.resize(und, (W, H), interpolation=cv2.INTER_AREA),
                                  cv2.COLOR_BGR2RGB))
+        if masks is not None:
+            mp = mask_dir / (Path(img.name).stem + ".png")
+            m = cv2.imread(str(mp), cv2.IMREAD_GRAYSCALE)
+            if m is None:
+                # a frame with no mask is a frame with no object in it, which is
+                # a legitimate answer - supervise all of it
+                missing_masks += 1
+                m = np.zeros((cam.height, cam.width), np.uint8)
+            m = cv2.remap(m, map1, map2, cv2.INTER_NEAREST)
+            masks.append((cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST) > 127))
         pose = img.cam_from_world()          # pycolmap 4.x: a method, not a field
         T = np.eye(4)
         T[:3, :3] = pose.rotation.matrix()
@@ -109,8 +127,14 @@ def load_colmap(sparse_dir: Path, image_dir: Path, long_side: int):
     print(f"[colmap] trimmed {(~keep).sum():,} outlier points "
           f"({100 * (~keep).mean():.1f}%)")
 
+    mstack = None
+    if masks is not None:
+        mstack = np.stack(masks)
+        print(f"[masks] {mstack.mean() * 100:.2f}% of pixels excluded from the loss"
+              f"{f', {missing_masks} frame(s) had no mask' if missing_masks else ''}")
+
     return (np.stack(imgs), np.stack(w2cs).astype(np.float32), K.astype(np.float32),
-            xyz[keep], rgb[keep], names)
+            xyz[keep], rgb[keep], names, mstack)
 
 
 def knn_scale(xyz: np.ndarray, k: int = 4) -> np.ndarray:
@@ -197,6 +221,12 @@ def main() -> int:
     p.add_argument("--sh-degree", type=int, default=3)
     p.add_argument("--holdout", type=int, default=8,
                    help="Every Nth frame is held out, the INRIA convention.")
+    p.add_argument("--masks", type=Path, default=None,
+                   help="Directory of <frame stem>.png binary masks, white where "
+                        "an object is. Those pixels are dropped from the loss, so "
+                        "the splat is built only from views where the object is "
+                        "not in the way - no object baked in, and nothing to prune "
+                        "out afterwards. scripts/mask_frames_sam3.py writes them.")
     p.add_argument("--vram-limit-gb", type=float, default=31.0,
                    help="Abort before exceeding this, rather than OOM mid-run.")
     a = p.parse_args()
@@ -204,9 +234,9 @@ def main() -> int:
     dev = "cuda"
     torch.manual_seed(0)
 
-    imgs, w2c, K, xyz, rgb, names = load_colmap(
+    imgs, w2c, K, xyz, rgb, names, masks = load_colmap(
         a.colmap / "colmap" / "sparse" / "0",
-        a.image_dir or (a.colmap / "images"), a.long_side)
+        a.image_dir or (a.colmap / "images"), a.long_side, a.masks)
     N, H, W = imgs.shape[:3]
     print(f"[data] {N} frames at {W}x{H}, fx={K[0,0]:.1f}, "
           f"{len(xyz):,} init points")
@@ -258,6 +288,22 @@ def main() -> int:
     state = strategy.initialize_state(scene_scale=scene_scale)
 
     gt_cpu = torch.from_numpy(imgs)
+    # True where the loss should ignore the pixel.
+    ign_cpu = torch.from_numpy(masks) if masks is not None else None
+
+    def supervised(pred, gt, i):
+        """Blank out the ignored pixels by substituting the target into them.
+
+        Both loss terms then see zero error there, and because `gt` is a
+        constant the gradient through those pixels is exactly zero. Doing it
+        this way rather than masking the L1 alone matters for SSIM, which is
+        computed over an 11x11 window and would otherwise carry the object's
+        error out into the pixels around it.
+        """
+        if ign_cpu is None:
+            return pred
+        keep = (~ign_cpu[i]).to(pred.device)[None].float()
+        return pred * keep + gt * (1.0 - keep)
     Kt = torch.from_numpy(K).to(dev)[None]
     w2ct = torch.from_numpy(w2c).to(dev)
     win = gaussian_window(11, 1.5, dev)
@@ -282,8 +328,9 @@ def main() -> int:
         with torch.no_grad():
             for i in test_idx:
                 out, _, _ = render(int(i), sh_deg)
-                pred = out[0].clamp(0, 1)
                 gt = gt_cpu[i].to(dev).float() / 255.0
+                pred = supervised(out[0].clamp(0, 1).permute(2, 0, 1),
+                                  gt.permute(2, 0, 1), int(i)).permute(1, 2, 0)
                 mse = torch.mean((pred - gt) ** 2).item()
                 tot_p += 10 * math.log10(1.0 / max(mse, 1e-10))
                 tot_s += float(ssim(pred.permute(2, 0, 1), gt.permute(2, 0, 1), win))
@@ -307,8 +354,8 @@ def main() -> int:
         out, _, info = render(i, sh_deg)
         strategy.step_pre_backward(params=params, optimizers=opts, state=state,
                                    step=step, info=info)
-        pred = out[0].clamp(0, 1).permute(2, 0, 1)
         gt = (gt_cpu[i].to(dev).float() / 255.0).permute(2, 0, 1)
+        pred = supervised(out[0].clamp(0, 1).permute(2, 0, 1), gt, i)
         loss = 0.8 * F.l1_loss(pred, gt) + 0.2 * (1.0 - ssim(pred, gt, win))
         for o in opts.values():
             o.zero_grad(set_to_none=True)

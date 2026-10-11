@@ -31,12 +31,13 @@ Example:
 
     PYTHONPATH=$RS_DEPLOY_ROOT:$PYTHONPATH \
     python scripts/run_mujoco_wbc_sim.py \
-        --scene-dir outputs/g1_ok \
-        --mjcf outputs/g1_ok/mujoco/scene_g1.xml
+        --scene-dir outputs/myroom \
+        --mjcf outputs/myroom/mujoco/scene_g1.xml
 """
 
 from __future__ import annotations
 
+import math
 import argparse
 import time
 from pathlib import Path
@@ -52,7 +53,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wbc_state_relay import pack_objects  # noqa: E402
+from wbc_state_relay import (  # noqa: E402
+    BODY_JOINTS,
+    HAND_JOINTS,
+    PACKET_FLOATS,
+    VIS_MAGIC,
+    pack_objects,
+)
 
 from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import (
     UnitreeSdk2Bridge,
@@ -80,10 +87,40 @@ class MujocoWBCSim:
         mjcf_path: Path,
         scene_dir: Path,
         no_hold: bool = False,
+        no_randomize: bool = False,
+        seed: int | None = None,
+        reach_min: float = 0.18,
+        reach_max: float = 0.45,
+        apple_reach_min: float = 0.16,
+        apple_reach_max: float = 0.40,
         paused: bool = False,
         publish_objects: str = "",
+        publish_state: str = "",
+        visual_dr: bool = False,
+        visual_seed: int | None = None,
+        control_port: int = 0,
     ):
         self.mjcf_path = Path(mjcf_path)
+
+        # Visual domain randomization. This process renders nothing - it only
+        # owns the episode, so it picks one seed per reset and broadcasts it;
+        # every renderer derives the same look from it (visual_randomizer.py).
+        # Episode 0 / seed 0 is the nominal scene, until the first reset.
+        self.visual_dr = bool(visual_dr)
+        self.visual_rng = np.random.default_rng(visual_seed)
+        self.visual_episode = 0
+        self.visual_seed = 0
+        self.pending_visual_seed = None     # b"RSSD": use this on the next reset
+
+        # Reset requests over UDP (b"RSRS"), so an unattended collection run
+        # can do what backspace does without anyone at the window.
+        self.ctrl_sock = None
+        if control_port:
+            import socket
+            self.ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.ctrl_sock.bind(("127.0.0.1", int(control_port)))
+            self.ctrl_sock.setblocking(False)
+            print(f"[sim] reset requests accepted on udp {control_port}")
         self.scene_dir = Path(scene_dir)
 
         self.paused = paused
@@ -178,6 +215,24 @@ class MujocoWBCSim:
         self._init_object_publisher(publish_objects)
 
         # ----------------------------------------------------
+        # Robot state publisher
+        #
+        # wbc_state_relay.py exists because the rendering env
+        # cannot speak DDS. But this process CAN: it is the
+        # DDS bridge, and mj_data is right here. Publishing the
+        # same 51-float packet straight from it removes the
+        # relay process entirely - one publisher instead of a
+        # sim, a relay, and the orphan-relay failure mode where
+        # two of them double every window's state.
+        #
+        # The relay stays for sims we do not own (gear_sonic's
+        # run_sim_loop.py): it observes the wire instead of
+        # needing a hook inside the simulator.
+        # ----------------------------------------------------
+
+        self._init_state_publisher(publish_state)
+
+        # ----------------------------------------------------
         # Optional initial joint hold
         #
         # This is only used until WBC starts sending commands.
@@ -188,6 +243,47 @@ class MujocoWBCSim:
 
         if not no_hold:
             self.initial_hold = self._get_initial_joint_positions()
+
+        # ----------------------------------------------------
+        # Table-top layout randomization
+        #
+        # The viewer's backspace resets qpos to qpos0, which puts the apple and
+        # the basket back in one fixed spot every time. Data collection wants
+        # variety, so reshuffle them on each reset - but only inside the half of
+        # the table facing the robot and inside arm's reach, or the layout
+        # becomes awkward to teleoperate.
+        # ----------------------------------------------------
+
+        # Built even with --no-randomize: exact replay (RSPL placement) needs it
+        # to know the table top. --no-randomize then only stops the reshuffle
+        # on reset, so a backspace no longer moves the apple somewhere random
+        # just before collection.py places it where the demo had it.
+        self.randomizer = None
+        self.randomize_on_reset = not no_randomize
+        if True:
+            import sys as _sys
+            _here = str(Path(__file__).resolve().parent / "realsim")
+            if _here not in _sys.path:
+                _sys.path.insert(0, _here)
+            try:
+                from randomize_objects import TableRandomizer
+                self.randomizer = TableRandomizer(
+                    self.model, self.data, seed=seed,
+                    reach=(reach_min, reach_max),
+                    reach_overrides={"apple": (apple_reach_min,
+                                               apple_reach_max)})
+                print(f"[sim] object randomization on: "
+                      f"{[i['name'] for i in self.randomizer.items]} "
+                      f"reach {reach_min:.2f}-{reach_max:.2f} m "
+                      f"(apple {apple_reach_min:.2f}-{apple_reach_max:.2f} m)")
+                if self.randomize_on_reset:
+                    self.randomize_layout()
+                else:
+                    print("[sim] layout reshuffle off: objects only move when "
+                          "placed (exact replay)")
+            except Exception as exc:
+                self.randomizer = None
+                print(f"[sim] object randomization off: {exc}")
 
         # ----------------------------------------------------
         # Timing
@@ -1017,6 +1113,228 @@ class MujocoWBCSim:
                 "besides the base, so its objects are static geometry"
             )
 
+    def _init_state_publisher(self, ports: str):
+
+        self.state_dsts = []
+        self.state_next = 0.0
+
+        if not ports:
+            return
+
+        import socket
+
+        def qadr(name):
+            jid = mujoco.mj_name2id(
+                self.model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                f"{name}_joint",
+            )
+            if jid < 0:
+                raise SystemExit(
+                    f"--publish-state: no joint '{name}_joint' in this scene. "
+                    f"The wire format is fixed by wbc_state_relay.py; a scene "
+                    f"missing one of its 43 joints cannot fill the packet."
+                )
+            return int(self.model.jnt_qposadr[jid])
+
+        self.state_jadr = np.array(
+            [qadr(n) for n in BODY_JOINTS + HAND_JOINTS]
+        )
+
+        self.state_badr = qadr("floating_base")
+
+        self.state_sock = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM,
+        )
+
+        self.state_dsts = [
+            ("127.0.0.1", int(q))
+            for q in str(ports).replace(" ", "").split(",")
+            if q
+        ]
+
+        print(
+            f"[state] publishing the robot ({len(self.state_jadr)} joints + "
+            f"base) to udp {[d[1] for d in self.state_dsts]} - "
+            f"wbc_state_relay.py is not needed"
+        )
+
+    def publish_state(self, rate: float = 50.0):
+        """Send the 51-float packet wbc_state_relay.py would have sent."""
+
+        if not self.state_dsts:
+            return
+
+        now = time.time()
+
+        if now < self.state_next:
+            return
+
+        self.state_next = now + 1.0 / rate
+
+        q = self.data.qpos
+
+        pkt = np.concatenate(
+            [
+                np.array([self.data.time], np.float32),
+                q[self.state_badr:self.state_badr + 3],       # base pos
+                q[self.state_badr + 3:self.state_badr + 7],   # base quat wxyz
+                q[self.state_jadr],                           # 29 body + 14 hand
+            ]
+        ).astype(np.float32)
+
+        assert pkt.size == PACKET_FLOATS, (
+            f"packet is {pkt.size} floats, the wire format is {PACKET_FLOATS}"
+        )
+
+        for d in self.state_dsts:
+            self.state_sock.sendto(pkt.tobytes(), d)
+
+    def _match_published_framing(self, viewer):
+        """Show, through a named camera, what that camera actually publishes.
+
+        The viewer draws a fixed camera at the WINDOW's aspect ratio and ignores
+        the camera's `resolution`. fovy is vertical and is honoured, so the
+        vertical extent is right but the horizontal extent is whatever the
+        window happens to be - usually far wider than the published frame. That
+        is why the viewer and the image-view windows disagree for the same
+        camera.
+
+        Rather than change the calibrated fovy in the MJCF, re-derive it here
+        for the live window so the HORIZONTAL field matches the published
+        stream. Every named camera in these scenes is 16:9 (768x432, 1280x720),
+        so at a 16:9 window this is a no-op and both axes match exactly; at any
+        other shape the horizontal still matches and the vertical gives.
+        """
+        ui = getattr(self, "_ui", None)
+        if ui is None:
+            return
+        if not hasattr(self, "_cam_fovy0"):
+            self._cam_fovy0 = self.model.cam_fovy.copy()
+        try:
+            vp = ui.viewport
+            win_aspect = float(vp.width) / float(vp.height)
+            cam = viewer.cam
+            cid = int(cam.fixedcamid)
+            fixed = int(cam.type) == int(mujoco.mjtCamera.mjCAMERA_FIXED)
+        except Exception:
+            return
+        if win_aspect <= 0:
+            return
+
+        # Anything not currently selected goes back to its calibrated value, so
+        # a stale override cannot leak into the next camera or onto the free one.
+        for i in range(self.model.ncam):
+            if not (fixed and i == cid):
+                self.model.cam_fovy[i] = self._cam_fovy0[i]
+        if not fixed or not (0 <= cid < self.model.ncam):
+            return
+
+        res = self.model.cam_resolution[cid]
+        if res[0] <= 0 or res[1] <= 0:
+            return                      # no declared frame: nothing to match
+        cam_aspect = float(res[0]) / float(res[1])
+        fovy0 = float(self._cam_fovy0[cid])
+        hfov = 2.0 * math.atan(math.tan(math.radians(fovy0) / 2.0) * cam_aspect)
+        fovy = 2.0 * math.degrees(math.atan(math.tan(hfov / 2.0) / win_aspect))
+        self.model.cam_fovy[cid] = fovy
+
+    def new_visual_episode(self):
+        """Draw the next visual seed. Called on every reset, layout or not."""
+        if not self.visual_dr:
+            return
+        self.visual_episode += 1
+        if self.pending_visual_seed is not None:
+            # Asked for a specific look - redoing an episode with its lighting.
+            self.visual_seed, self.pending_visual_seed = self.pending_visual_seed, None
+        else:
+            self.visual_seed = int(self.visual_rng.integers(1, 2**32 - 1))
+        print(f"[sim] visual episode {self.visual_episode} "
+              f"seed {self.visual_seed}", flush=True)
+        self.obj_next = 0.0                 # send it now, not at the next tick
+
+    def poll_control(self):
+        """Drain the control socket -> (reset requested?, placements or None).
+
+        b"RSRS"                            reset, exactly what backspace does
+        b"RSSD" + uint32 seed              use this visual seed on the next reset
+        b"RSPL" + uint32 n + n * (char[16] name needle, float32 x, y, yaw)
+                                           put those objects there, sim frame,
+                                           resting on the table - exact replay
+                                           of a recorded demo's layout
+        """
+        if self.ctrl_sock is None:
+            return False, None
+        hit, place = False, None
+        while True:
+            try:
+                d = self.ctrl_sock.recv(4096)
+            except BlockingIOError:
+                return hit, place
+            if d[:4] == b"RSRS":
+                hit = True
+            elif d[:4] == b"RSSD" and len(d) == 8:
+                self.pending_visual_seed = int(np.frombuffer(d, "<u4", 1, 4)[0])
+                print(f"[sim] next reset will use visual seed "
+                      f"{self.pending_visual_seed}", flush=True)
+            elif d[:4] == b"RSPL" and len(d) >= 8:
+                n = int(np.frombuffer(d, "<u4", 1, 4)[0])
+                if len(d) == 8 + n * 28:
+                    place = []
+                    for i in range(n):
+                        o = 8 + i * 28
+                        name = d[o:o + 16].split(b"\0", 1)[0].decode()
+                        x, y, yaw = np.frombuffer(d, "<f4", 3, o + 16)
+                        place.append((name, float(x), float(y), float(yaw)))
+
+    def place_objects(self, place):
+        """Set objects to requested xy/yaw, resting on the table top."""
+        if self.randomizer is None:
+            print("[sim] cannot place objects: layout randomizer is off "
+                  "(it is what knows the table top); start without "
+                  "--no-randomize", flush=True)
+            return
+        out = []
+        for needle, x, y, yaw in place:
+            it = next((i for i in self.randomizer.items if needle in i["name"]), None)
+            if it is None:
+                print(f"[sim] place: no object matching {needle!r}", flush=True)
+                continue
+            q = it["quat"]
+            # `yaw` is the world heading wanted for the object's body x axis;
+            # turn it into a rotation off the nominal pose. NaN = keep nominal.
+            if np.isnan(yaw):
+                yaw = 0.0
+            else:
+                w_, x_, y_, z_ = q
+                nominal = np.arctan2(2 * (x_ * y_ + w_ * z_),
+                                     1 - 2 * (y_ * y_ + z_ * z_))
+                yaw = yaw - nominal
+            c, s = np.cos(yaw / 2), np.sin(yaw / 2)
+            spun = np.array([c * q[0] - s * q[3], c * q[1] - s * q[2],
+                             c * q[2] + s * q[1], c * q[3] + s * q[0]])
+            a = it["adr"]
+            self.data.qpos[a:a + 2] = (x, y)
+            self.data.qpos[a + 2] = self.randomizer.top_z + it["lift"] + 0.002
+            self.data.qpos[a + 3:a + 7] = spun / np.linalg.norm(spun)
+            out.append(f"{needle}=({x:+.3f},{y:+.3f})")
+        self.randomizer.zero_velocities(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
+        print("[sim] placed " + "  ".join(out), flush=True)
+
+    def randomize_layout(self):
+        """Give the table-top objects a fresh, reachable layout."""
+        if self.randomizer is None or not self.randomize_on_reset:
+            return
+        placed = self.randomizer.apply(self.data)
+        self.randomizer.zero_velocities(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
+        if placed:
+            print("[sim] layout " + "  ".join(
+                f"{n.split('_', 1)[-1]}=({p[0]:+.3f},{p[1]:+.3f})"
+                for n, p in placed.items()), flush=True)
+
     def publish_objects(self, rate: float = 50.0):
         """Send the current pose of every tracked free joint, rate-limited."""
 
@@ -1040,6 +1358,14 @@ class MujocoWBCSim:
         for d in self.obj_dsts:
             self.obj_sock.sendto(pkt, d)
 
+        # Repeated at the object rate rather than sent once, so a renderer
+        # started (or restarted) mid-episode still picks up the current look.
+        if self.visual_dr:
+            vis = VIS_MAGIC + np.array([self.visual_seed, self.visual_episode],
+                                       "<u4").tobytes()
+            for d in self.obj_dsts:
+                self.obj_sock.sendto(vis, d)
+
     # ========================================================
     # Run
     # ========================================================
@@ -1062,9 +1388,55 @@ class MujocoWBCSim:
             "[WBC] waiting for rt/lowcmd..."
         )
 
+        # Why the viewer's pause button used to do nothing.
+        #
+        # launch_passive means THIS loop owns mj_step - the viewer only draws.
+        # Its Pause button and SPACE toggle the viewer's OWN run flag, which in
+        # passive mode has no physics loop attached, so the robot kept stepping
+        # regardless. Measured: SPACE never even reached a key_callback, because
+        # the built-in UI consumes its own bindings before the callback runs.
+        #
+        # The fix is to read the flag the button actually writes. Handle._get_sim()
+        # exposes the underlying Simulate, whose `run` is exactly that state, so
+        # the native button and SPACE now drive this loop and the UI checkbox
+        # always reflects reality.
+        #
+        # SIGUSR1 stays as the no-terminal, no-window route, and writes the same
+        # flag so the UI does not disagree with us:
+        #   kill -USR1 $(pgrep -f run_mujoco_wbc_sim)
+        self._running = not self.paused
+        self._single_step = False
+        self._ui = None
+
+        def key_callback(keycode):
+            # Only reached for keys the viewer's UI does not claim itself.
+            if keycode in (46, 190) and not self._running:   # '.' single step
+                self._single_step = True
+
+        import signal
+
+        # The UI's flag is read-only, so SIGUSR1 cannot write it. Instead it
+        # flips an inversion: effective = ui.run XOR invert. Both controls then
+        # work independently and neither can leave the sim with no way to pause
+        # - which matters because whether keystrokes reach the viewer at all
+        # depends on the window manager.
+        # --paused starts here rather than by writing the UI's flag, which is
+        # read-only. The button then still works: pressing it flips ui.run, the
+        # XOR flips with it, and the sim runs.
+        self._invert = bool(self.paused)
+
+        def on_usr1(_sig, _frm):
+            self._invert = not self._invert
+            self._running = not self._running
+            print(f"[sim] {'running' if self._running else 'PAUSED'} (SIGUSR1)",
+                  flush=True)
+
+        signal.signal(signal.SIGUSR1, on_usr1)
+
         with mujoco.viewer.launch_passive(
             self.model,
             self.data,
+            key_callback=key_callback,
         ) as viewer:
 
             # Disable rangefinder visualization.
@@ -1077,32 +1449,169 @@ class MujocoWBCSim:
             # Before the loop as well: a renderer that starts later would
             # otherwise hold the spawn pose until the first object packet.
             self.publish_objects(rate=1e9)
+            self.publish_state(rate=1e9)
 
-            running = not self.paused
+            # The flag behind the viewer's Pause button. Private, so treat its
+            # absence as non-fatal: without it the sim simply cannot be paused
+            # from the window, which is how it behaved before.
+            try:
+                ui = viewer._get_sim()
+                self._running = bool(ui.run)   # read-only: read it, never assign
+                self._ui = ui
+                print("[sim] pause: the viewer's Pause button and SPACE control "
+                      "this loop", flush=True)
+                self._running = bool(ui.run) != self._invert
+            except Exception as exc:
+                print(f"[sim] pause unavailable from the viewer ({exc}); "
+                      f"use kill -USR1 $(pgrep -f run_mujoco_wbc_sim)",
+                      flush=True)
+
+            if not self._running:
+                print("[sim] started PAUSED - press the viewer's Pause button "
+                      "or SPACE to run", flush=True)
 
             last_print = time.time()
+
+            # Physics rate and render rate are NOT the same rate.
+            #
+            # This loop used to do exactly one mj_step per viewer.sync(). sync()
+            # costs ~13 ms, so the intended sleep(sim_dt - elapsed) never slept
+            # and physics advanced at render rate: 65 steps/s x 2 ms = 0.13 s of
+            # sim per wall second, i.e. 13% of real time. Nothing looked broken -
+            # the sim just ran in slow motion, which is fatal for teleop, because
+            # the WBC and the operator both act in WALL time. A 50 Hz controller
+            # against a 13%-speed sim moves the robot an eighth as far per
+            # command, which reads as "the robot barely responds".
+            #
+            # So: step until sim time has caught up with wall time, then render
+            # at most SYNC_HZ. The step budget per iteration bounds the catch-up
+            # so a slow patch cannot spiral.
+            SYNC_HZ = 60.0
+            MAX_STEPS_PER_ITER = 100
+
+            wall_ref = time.time()
+            sim_ref = self.data.time
+            last_time = self.data.time
+            udp_reset = False
+            self._last_visual_reset = 0.0
+            last_sync = 0.0
+            rtf = 1.0
 
             while viewer.is_running():
 
                 loop_start = time.time()
 
+                # Backspace in the viewer calls mj_resetData behind our back;
+                # the only observable is sim time jumping backwards.
+                # A reset request does exactly what backspace does, and then
+                # takes the same path below.
+                want_reset, place = self.poll_control()
+                if want_reset:
+                    with viewer.lock():
+                        mujoco.mj_resetData(self.model, self.data)
+                        mujoco.mj_forward(self.model, self.data)
+                    print("[sim] reset (requested over udp)", flush=True)
+                    udp_reset = True
+                if place:
+                    with viewer.lock():
+                        self.place_objects(place)
+                if self.data.time < last_time - 1e-9:
+                    # WHO reset it? Three things make sim time jump back:
+                    #   backspace in the viewer, our own reset request, and
+                    #   MuJoCo itself - when the physics blows up (NaN / huge
+                    #   acceleration) mj_step silently calls mj_resetData and
+                    #   leaves a BADQACC/QVEL/QPOS warning behind. That last one looks
+                    #   exactly like a second backspace nobody pressed.
+                    bad = next((self.data.warning[int(w)] for w in (
+                        mujoco.mjtWarning.mjWARN_BADQACC,
+                        mujoco.mjtWarning.mjWARN_BADQVEL,
+                        mujoco.mjtWarning.mjWARN_BADQPOS)
+                        if self.data.warning[int(w)].number > 0), None)
+                    if bad is not None:
+                        dof = int(bad.lastinfo)
+                        jn = (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT,
+                                                int(self.model.dof_jntid[dof]))
+                              if 0 <= dof < self.model.nv else "?")
+                        cause = (f"MuJoCo AUTO-reset: physics went unstable at "
+                                 f"dof {dof} ({jn}) at t={last_time:.2f}s")
+                        for w in (mujoco.mjtWarning.mjWARN_BADQACC,
+                                  mujoco.mjtWarning.mjWARN_BADQVEL,
+                                  mujoco.mjtWarning.mjWARN_BADQPOS):
+                            self.data.warning[int(w)].number = 0
+                        auto = True
+                    else:
+                        cause = ("udp request" if udp_reset else
+                                 f"viewer (backspace) at t={last_time:.2f}s")
+                        auto = False
+                    udp_reset = False
+                    # One press, one look: an unstable-physics reset, or a key
+                    # registering twice within 1.5 s, does not start a new
+                    # visual episode - the lighting stays that of the reset the
+                    # operator actually asked for.
+                    dup = (not auto and time.time() - self._last_visual_reset < 1.5)
+                    print(f"[sim] reset: {cause}"
+                          f"{' - same look kept' if auto or dup else ''}", flush=True)
+                    self.randomize_layout()
+                    if not (auto or dup):
+                        self.new_visual_episode()
+                        self._last_visual_reset = time.time()
+                    wall_ref, sim_ref = time.time(), self.data.time
+                last_time = self.data.time
+
                 # --------------------------------------------
                 # Simulation
                 # --------------------------------------------
 
-                if running:
+                # The UI owns pause when it is reachable: the button writes
+                # `run`, and reading it every iteration is what makes the
+                # button real instead of decorative.
+                if self._ui is not None:
+                    ui_run = bool(self._ui.run) != self._invert
+                    if ui_run != self._running:
+                        self._running = ui_run
+                        print(f"[sim] {'running' if ui_run else 'PAUSED'} "
+                              f"(viewer)", flush=True)
+
+                if self._running:
+
+                    # How much sim time SHOULD have elapsed by now.
+                    target = (time.time() - wall_ref) + sim_ref
+                    steps = 0
+
+                    while self.data.time < target and steps < MAX_STEPS_PER_ITER:
+                        self.step()
+                        steps += 1
+
+                    if steps == 0:
+                        # Ahead of schedule: give the wall clock a moment rather
+                        # than spinning a core for nothing.
+                        time.sleep(0.0005)
+
+                elif self._single_step:
 
                     self.step()
+                    self._single_step = False
+                    wall_ref, sim_ref = time.time(), self.data.time
+
+                else:
+                    # Paused: hold the reference so resuming does not try to
+                    # replay the whole pause in one burst.
+                    wall_ref, sim_ref = time.time(), self.data.time
+                    time.sleep(0.002)
 
                 # Outside the `running` guard on purpose: paused or dragged in
                 # the viewer, the renderers should still follow.
                 self.publish_objects()
+                self.publish_state()
 
                 # --------------------------------------------
-                # Viewer
+                # Viewer - at SYNC_HZ, not once per physics step
                 # --------------------------------------------
 
-                viewer.sync()
+                if loop_start - last_sync >= 1.0 / SYNC_HZ:
+                    self._match_published_framing(viewer)
+                    viewer.sync()
+                    last_sync = loop_start
 
                 # --------------------------------------------
                 # Keyboard / pause
@@ -1127,29 +1636,25 @@ class MujocoWBCSim:
                     else:
                         status = "WAITING FOR WBC"
 
+                    rtf = (self.data.time - sim_ref) / max(now - wall_ref, 1e-6)
+
                     print(
-                        f"[sim] t={self.data.time:.2f}s | "
+                        f"[sim] t={self.data.time:.2f}s rtf={rtf:.2f}x"
+                        f"{'' if self._running else ' PAUSED'} | "
                         f"{status}",
                         flush=True,
                     )
 
                     last_print = now
+                    wall_ref, sim_ref = now, self.data.time
 
                 # --------------------------------------------
                 # Real-time pacing
                 # --------------------------------------------
 
-                elapsed = time.time() - loop_start
-
-                sleep_time = (
-                    self.sim_dt - elapsed
-                )
-
-                if sleep_time > 0:
-
-                    time.sleep(
-                        sleep_time
-                    )
+                # No trailing sleep: pacing is the catch-up loop above. Sleeping
+                # a fixed sim_dt here is what capped the whole thing at render
+                # rate in the first place.
 
         print("[MuJoCo] viewer closed")
 
@@ -1191,6 +1696,62 @@ def main() -> int:
     )
 
     parser.add_argument(
+        "--no-randomize",
+        action="store_true",
+        help=(
+            "Keep the fixed table layout. By default the apple and the basket "
+            "get a fresh position on startup and on every viewer reset "
+            "(backspace), inside the robot's half of the table and inside "
+            "arm's reach."
+        ),
+    )
+
+    parser.add_argument("--seed", type=int, default=None)
+
+    parser.add_argument(
+        "--reach-min",
+        type=float,
+        default=0.18,
+        help="Closest an object may spawn to the robot base, metres.",
+    )
+
+    parser.add_argument(
+        "--reach-max",
+        type=float,
+        default=0.45,
+        help="Furthest an object may spawn from the robot base, metres.",
+    )
+
+    parser.add_argument(
+        "--apple-reach-min",
+        type=float,
+        default=0.16,
+        help="Closest the apple may spawn to the robot base, metres. "
+             "Overrides --reach-min for the apple only.",
+    )
+
+    parser.add_argument(
+        "--apple-reach-max",
+        type=float,
+        default=0.40,
+        help="Furthest the apple may spawn from the robot base, metres. "
+             "Overrides --reach-max for the apple only.",
+    )
+
+    parser.add_argument(
+        "--publish-state",
+        default="",
+        help=(
+            "Comma-separated UDP ports to stream the "
+            "robot's pose to, in the same 51-float format "
+            "wbc_state_relay.py uses. With this, the relay "
+            "process is unnecessary: this IS the DDS bridge, "
+            "so mj_data is already here. Keep the relay only "
+            "for a sim this script does not own."
+        ),
+    )
+
+    parser.add_argument(
         "--publish-objects",
         default="",
         help=(
@@ -1202,6 +1763,28 @@ def main() -> int:
             "this the renderers show the objects frozen "
             "at their spawn pose."
         ),
+    )
+
+    parser.add_argument(
+        "--visual-dr",
+        action="store_true",
+        help=(
+            "Broadcast a fresh visual-randomization seed on every reset "
+            "(backspace) on the --publish-objects ports. The renderers apply "
+            "it; see scripts/realsim/visual_randomizer.py."
+        ),
+    )
+
+    parser.add_argument("--visual-seed", type=int, default=None,
+                        help="Seed the sequence of visual seeds, for "
+                             "reproducible sessions.")
+
+    parser.add_argument(
+        "--control-port",
+        type=int,
+        default=0,
+        help="UDP port to accept reset requests on (b'RSRS'), the "
+             "programmatic backspace. 0 = off.",
     )
 
     args = parser.parse_args()
@@ -1216,8 +1799,18 @@ def main() -> int:
         mjcf_path=args.mjcf,
         scene_dir=args.scene_dir,
         no_hold=args.no_hold,
+        no_randomize=args.no_randomize,
+        seed=args.seed,
+        reach_min=args.reach_min,
+        reach_max=args.reach_max,
+        apple_reach_min=args.apple_reach_min,
+        apple_reach_max=args.apple_reach_max,
         paused=args.paused,
         publish_objects=args.publish_objects,
+        publish_state=args.publish_state,
+        visual_dr=args.visual_dr,
+        visual_seed=args.visual_seed,
+        control_port=args.control_port,
     )
 
     sim.run()

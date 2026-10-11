@@ -1,0 +1,130 @@
+diff --git a/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py b/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py
+index fc0746c..9b70671 100644
+--- a/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py
++++ b/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py
+@@ -547,6 +547,22 @@ class ObjectCentricSSI(SSIPointmapNormalizer):
+         mask_bool = mask_resized.reshape(-1) > 0.5
+         mask_points = pointmap_flat[:, mask_bool]
+ 
++        # `.max()` with no dim raises on an empty tensor, so the guard below
++        # crashed on exactly the condition it exists to detect: a mask that
++        # selects zero pointmap pixels. Test emptiness first.
++        if mask_points.numel() == 0:
++            logger.warning(
++                f"Mask selected 0 of {mask_bool.numel()} pointmap pixels "
++                f"(mask in {tuple(mask.shape)} -> resized {tuple(mask_resized.shape)}, "
++                f"pointmap {tuple(pointmap.shape)}, "
++                f"mask>0.5 count={int((mask_resized > 0.5).sum())}, "
++                f"mask max={float(mask_resized.max()):.4f})"
++            )
++            if self.raise_on_no_valid_points:
++                raise ValueError("No valid points found in mask (mask selected 0 pixels)")
++            return (torch.ones_like(pointmap_flat[:, 0]) * self.scale_factor,
++                    torch.zeros_like(pointmap_flat[:, 0]))
++
+         if mask_points.isfinite().max() == 0:
+             if self.raise_on_no_valid_points:
+                 raise ValueError(f"No valid points found in mask")
+diff --git a/sam3d_objects/model/backbone/tdfy_dit/renderers/gaussian_render.py b/sam3d_objects/model/backbone/tdfy_dit/renderers/gaussian_render.py
+index c041714..99e3a69 100755
+--- a/sam3d_objects/model/backbone/tdfy_dit/renderers/gaussian_render.py
++++ b/sam3d_objects/model/backbone/tdfy_dit/renderers/gaussian_render.py
+@@ -230,7 +230,7 @@ class GaussianRenderer:
+                 "far": None,
+                 "ssaa": 1,
+                 "bg_color": "random",
+-                "backend": "inria",
++                "backend": "gsplat",  # inria backend needs the mip-splatting diff_gaussian_rasterization fork (no sm_120 build); gsplat is installed and built for sm_120
+             }
+         )
+         self.rendering_options.update(rendering_options)
+diff --git a/sam3d_objects/model/backbone/tdfy_dit/utils/render_utils.py b/sam3d_objects/model/backbone/tdfy_dit/utils/render_utils.py
+index c7d8514..ea1cf97 100644
+--- a/sam3d_objects/model/backbone/tdfy_dit/utils/render_utils.py
++++ b/sam3d_objects/model/backbone/tdfy_dit/utils/render_utils.py
+@@ -74,7 +74,7 @@ def render_frames(
+         renderer.rendering_options.far = options.get("far", 1.6)
+         renderer.rendering_options.bg_color = options.get("bg_color", (0, 0, 0))
+         renderer.rendering_options.ssaa = options.get("ssaa", 1)
+-        renderer.rendering_options.backend = options.get("backend", "inria")
++        renderer.rendering_options.backend = options.get("backend", "gsplat")  # inria needs mip-splatting diff_gaussian_rasterization (no sm_120 build)
+         renderer.pipe.kernel_size = kwargs.get("kernel_size", 0.1)
+         renderer.pipe.use_mip_gaussian = True
+     elif isinstance(sample, MeshExtractResult):
+@@ -137,7 +137,7 @@ def render_gaussian_color_stay_in_device(
+     renderer.rendering_options.far = options.get("far", 1.6)
+     renderer.rendering_options.bg_color = options.get("bg_color", (0, 0, 0))
+     renderer.rendering_options.ssaa = options.get("ssaa", 1)
+-    renderer.rendering_options.backend = options.get("backend", "inria")
++    renderer.rendering_options.backend = options.get("backend", "gsplat")  # inria needs mip-splatting diff_gaussian_rasterization (no sm_120 build)
+     renderer.pipe.kernel_size = kwargs.get("kernel_size", 0.1)
+     renderer.pipe.use_mip_gaussian = True
+ 
+@@ -159,7 +159,7 @@ def render_video(
+     num_frames=300,
+     r=2,
+     fov=40,
+-    backend="inria",
++    backend="gsplat",
+     **kwargs,
+ ):
+     yaws = torch.linspace(0, 2 * 3.1415, num_frames)
+diff --git a/sam3d_objects/pipeline/inference_pipeline.py b/sam3d_objects/pipeline/inference_pipeline.py
+index 312e3c6..ec0bc55 100644
+--- a/sam3d_objects/pipeline/inference_pipeline.py
++++ b/sam3d_objects/pipeline/inference_pipeline.py
+@@ -581,7 +581,23 @@ class InferencePipeline:
+             if mask.ndim == 2:
+                 mask = mask[..., None]
+ 
+-            logger.info(f"Replacing alpha channel with the provided mask")
++            # load_image_and_mask_from_rgba returns `alpha > 0`, i.e. a BOOLEAN
++            # mask. Concatenating that straight into an 8-bit alpha channel
++            # writes 0/1 instead of 0/255; the pipeline later divides alpha by
++            # 255, so the mask arrives as 0.0039 and every `> 0.5` test fails.
++            # The mask then selects zero pixels, and normalisation silently
++            # falls back to a default scale - which yields a mesh at the wrong
++            # size rather than an error.
++            if mask.dtype == bool:
++                mask = mask.astype(np.uint8) * 255
++            elif np.issubdtype(mask.dtype, np.floating):
++                mask = (mask > 0.5).astype(np.uint8) * 255
++            elif mask.max() <= 1:
++                mask = mask.astype(np.uint8) * 255
++            mask = mask.astype(image.dtype)
++
++            logger.info(f"Replacing alpha channel with the provided mask "
++                        f"(dtype={mask.dtype}, max={int(mask.max())})")
+             assert mask.shape[:2] == image.shape[:2]
+             image = np.concatenate([image[..., :3], mask], axis=-1)
+ 
+diff --git a/sam3d_objects/run_inference.py b/sam3d_objects/run_inference.py
+index 7ea559a..a12c1e7 100644
+--- a/sam3d_objects/run_inference.py
++++ b/sam3d_objects/run_inference.py
+@@ -251,6 +251,17 @@ def run_inference(
+         logger.info("Single-view inference mode")
+         image = view_images[0]
+         mask = view_masks[0] if view_masks else None
++        # `attention_logger` is accepted by run_multi_view (inference_pipeline.py)
++        # but NOT by InferencePipelinePointMap.run, so passing it here raises
++        # TypeError and single-view inference cannot complete at all. It is only
++        # ever non-None when --save-attention is requested, which is a debugging
++        # aid unrelated to mesh output, so it is dropped rather than plumbed
++        # through - and reported, so the request is not silently ignored.
++        if attention_logger is not None:
++            logger.warning(
++                "Cross-attention logging is not supported by the single-view "
++                "pipeline (InferencePipelinePointMap.run); continuing without it."
++            )
+         result = inference._pipeline.run(
+             image,
+             mask,
+@@ -262,7 +273,6 @@ def run_inference(
+             stage1_inference_steps=stage1_steps,
+             stage2_inference_steps=stage2_steps,
+             decode_formats=decode_formats,
+-            attention_logger=attention_logger,
+         )
+     else:
+         logger.info("Multi-view inference mode")

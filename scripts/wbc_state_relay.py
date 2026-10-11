@@ -41,6 +41,9 @@ N_HAND = 7
 PACKET_FLOATS = 1 + 3 + 4 + N_BODY + 2 * N_HAND
 
 OBJ_MAGIC = b"RSOB"
+# b"RSVR" + uint32 seed + uint32 episode: the visual-randomization seed, sent by
+# run_mujoco_wbc_sim.py --visual-dr. Kept in step with visual_randomizer.py.
+VIS_MAGIC = b"RSVR"
 OBJ_NAME_BYTES = 40
 OBJ_STRIDE = OBJ_NAME_BYTES + 7 * 4
 
@@ -87,9 +90,17 @@ BODY_JOINTS = [
     "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow",
     "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw",
 ]
-HAND_JOINTS = [f"{s}_hand_{f}" for s in ("left", "right")
-               for f in ("thumb_0", "thumb_1", "thumb_2",
-                         "middle_0", "middle_1", "index_0", "index_1")]
+# Dex3 MOTOR order, which is not the tidy thumb-first order and is not the same
+# on both hands. rt/dex3/<side>/state carries motor_state[0..6] in exactly this
+# order, so listing them any other way silently writes each finger's angle onto
+# a different finger - the hand still moves, it just moves wrongly, which is far
+# harder to spot than a hand that does not move at all.
+HAND_JOINTS = ([f"left_hand_{f}" for f in
+                ("index_0", "index_1", "middle_0", "middle_1",
+                 "thumb_0", "thumb_1", "thumb_2")]
+               + [f"right_hand_{f}" for f in
+                  ("middle_0", "middle_1", "index_0", "index_1",
+                   "thumb_0", "thumb_1", "thumb_2")])
 
 
 class MirrorReceiver:
@@ -120,7 +131,7 @@ class MirrorReceiver:
         # The frame shift only exists when the sim runs a scene that
         # make_wbc_scene.py re-origined onto the robot's stance. When the sim and
         # the renderer load the SAME mjcf - which is the case for
-        # outputs/g1_ok/mujoco/scene_g1.xml driven by run_mujoco_wbc_sim.py -
+        # a scene_g1.xml driven by run_mujoco_wbc_sim.py directly -
         # the two frames are already identical and any transform would move the
         # robot off its own splat.
         frame_json = scene_dir / "mujoco" / "wbc" / "scene_wbc.frame.json"
@@ -176,6 +187,10 @@ class MirrorReceiver:
         self.sock.setblocking(False)
         self.port, self.got, self.got_obj = port, 0, 0
         self.missing = set()
+        # (seed, episode) from the sim's RSVR datagram, for renderers doing
+        # visual domain randomization - see scripts/realsim/visual_randomizer.py.
+        # None until the sim sends one; stays None when it runs without --visual-dr.
+        self.visual = None
 
     def _pos(self, p):
         return self.rot @ np.asarray(p, float) + self.origin
@@ -206,6 +221,8 @@ class MirrorReceiver:
                 break
             if d[:4] == OBJ_MAGIC:
                 objpkt = d
+            elif d[:4] == VIS_MAGIC and len(d) == 12:
+                self.visual = tuple(np.frombuffer(d, "<u4", 2, 4).tolist())
             elif len(d) == PACKET_FLOATS * 4:
                 pkt = d
 

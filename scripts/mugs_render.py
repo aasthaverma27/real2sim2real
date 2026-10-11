@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Render a RoboSnap scene through MuGS's GaussianSensor.
 
-Same idea as scripts/mujoco_splat_render.py - MuJoCo draws the physics, gsplat
-draws the room, the two are composited - but the renderer is the vendored
+MuJoCo draws the physics, gsplat draws the room, the two are composited - but the renderer is the vendored
 third_party/MuGS sensor, so anything built on GaussianSensor (rollout loops,
 mjlab batching) works on our scenes.
 
@@ -21,9 +20,9 @@ have a reconstruction:
               structurally instead: every visual geom that is not the floor,
               not a worldbody geom, and not collision-only.
 
-    bash scripts/run_mugs_render.sh --scene-dir outputs/video_scene
-    bash scripts/run_mugs_render.sh --scene-dir outputs/video_scene \
-        --capture-camera --compare outputs/video_scene/hybrid_capture.png
+    bash scripts/run_mugs_render.sh --scene-dir outputs/myroom
+    bash scripts/run_mugs_render.sh --scene-dir outputs/myroom \
+        --capture-camera --compare outputs/myroom/hybrid_capture.png
 """
 from __future__ import annotations
 

@@ -8,7 +8,7 @@
 # puts them back. It is idempotent and safe to run any time.
 #
 #   scripts/register_submodules.sh
-#   git diff --cached --stat        # should list the four external/ entries
+#   git diff --cached --stat        # should list the external/ entry
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -20,10 +20,7 @@ while IFS=$'\t' read -r path sha; do
   git update-index --add --cacheinfo "160000,$sha,$path"
   printf '  registered %-45s @ %s\n' "$path" "${sha:0:10}"
 done <<'ENTRIES'
-external/Isaac-GR00T	b9955401d50c92a29258732e3ad6ccd579f1bdc0
-external/unitree_sdk2_python	a035adeaa6f8ea171bef9a43e8477abb87a0b35e
-external/vla_for_simulation_testing	ce0252118e7595dc4785a8b031c35edf534b993a
-external/simple_wbc_code	6c0d5101501c04e60cc86642be758d5ae4e78415
+external/GR00T-WholeBodyControl	b042411fae38ee4d1af9aac82a37a1f8d14d6dd0
 ENTRIES
 
 git add .gitmodules

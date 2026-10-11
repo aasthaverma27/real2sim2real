@@ -31,10 +31,17 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ply", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--poses", type=Path,
-                   default=Path("outputs/g1_ok/roommesh/colmap_poses.json"))
-    p.add_argument("--scale", type=float, required=True)
-    p.add_argument("--yaw", type=float, required=True)
+    p.add_argument("--poses", type=Path, default=None,
+                   help="<scene>/roommesh/colmap_poses.json (written by "
+                        "colmap_from_video.py); needed with --scale/--yaw")
+    p.add_argument("--transform", type=Path, default=None,
+                   help="JSON {R, s, t} from align_splat_auto.py. Supplies the "
+                        "whole similarity, so --scale/--yaw/--poses/--table-* "
+                        "are all unused - and so is the assumption behind them, "
+                        "that the camera path is planar enough to read gravity "
+                        "off its SVD.")
+    p.add_argument("--scale", type=float)
+    p.add_argument("--yaw", type=float)
     p.add_argument("--table-h", type=float, default=-1.1550)
     p.add_argument("--table-xy", type=float, nargs=2, default=[0.648, 0.676])
     p.add_argument("--world-table", type=float, nargs=3, default=[-0.055, 0.724, 0.713])
@@ -62,25 +69,36 @@ def main() -> int:
         K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
         return np.eye(3) + np.sin(th) * K + (1 - np.cos(th)) * (K @ K)
 
+    if a.transform is None and (a.scale is None or a.yaw is None):
+        p.error("give --transform, or both --scale and --yaw")
+
     ply = PlyData.read(str(a.ply))
     vert = ply["vertex"]
     names = list(vert.data.dtype.names)
     n0 = len(vert)
     xyz = np.stack([vert["x"], vert["y"], vert["z"]], 1).astype(np.float64)
 
-    poses = json.load(open(a.poses))
-    C = np.array([poses[k]["C"] for k in poses])
-    up = np.linalg.svd(C - C.mean(0), full_matrices=False)[2][2]
-    if (xyz[::97] @ up < np.median(C @ up)).mean() < 0.5:
-        up = -up
-    R0 = basis_from_up(up)
-    b1 = np.cross(up, [0.0, 0.0, 1.0]); b1 /= np.linalg.norm(b1)
-    b2 = np.cross(up, b1)
-    anchor = a.table_xy[0] * b1 + a.table_xy[1] * b2 + a.table_h * up
-    R = yaw_mat(a.yaw) @ R0
-    s = a.scale
-    t = np.asarray(a.world_table, float) - s * (R @ anchor)
-    print(f"[apply] scale {s:.4f}  yaw {a.yaw:.2f} deg  det(R) {np.linalg.det(R):+.6f}")
+    if a.transform is not None:
+        tf = json.load(open(a.transform))
+        R = np.asarray(tf["R"], float)
+        s = float(tf["s"])
+        t = np.asarray(tf["t"], float)
+        print(f"[apply] transform from {a.transform} "
+              f"({tf.get('source', 'unknown source')})")
+    else:
+        poses = json.load(open(a.poses))
+        C = np.array([poses[k]["C"] for k in poses])
+        up = np.linalg.svd(C - C.mean(0), full_matrices=False)[2][2]
+        if (xyz[::97] @ up < np.median(C @ up)).mean() < 0.5:
+            up = -up
+        R0 = basis_from_up(up)
+        b1 = np.cross(up, [0.0, 0.0, 1.0]); b1 /= np.linalg.norm(b1)
+        b2 = np.cross(up, b1)
+        anchor = a.table_xy[0] * b1 + a.table_xy[1] * b2 + a.table_h * up
+        R = yaw_mat(a.yaw) @ R0
+        s = a.scale
+        t = np.asarray(a.world_table, float) - s * (R @ anchor)
+    print(f"[apply] scale {s:.4f}  det(R) {np.linalg.det(R):+.6f}")
     print(f"[apply] t {np.round(t,4)}")
 
     opa = 1.0 / (1.0 + np.exp(-vert["opacity"].astype(np.float32)))

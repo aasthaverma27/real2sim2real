@@ -158,6 +158,21 @@ fi
 
 [[ "${SETUP_SAM3}" == "1" ]] && setup_source "SAM3" "third_party/sam3" "${SAM3_URL}" "${SAM3_COMMIT}" "inference_image.py" 0
 [[ "${SETUP_SAM3D}" == "1" ]] && setup_source "SAM-3D-Objects" "third_party/sam-3d-objects" "${SAM3D_URL}" "${SAM3D_COMMIT}" "sam3d_objects/image2glb.py" 0
+
+# SAM-3D-Objects renders its gaussians with the inria rasterizer, which has no
+# build for Blackwell (sm_120, RTX 50xx); the patch switches it to gsplat and
+# guards against empty masks. Applied once - a second run detects it is in.
+apply_patch_once() {   # apply_patch_once <repo dir> <patch>
+  if git -C "$1" apply --reverse --check "$2" >/dev/null 2>&1; then
+    log "$(basename "$2") already applied"
+  elif git -C "$1" apply --check "$2" >/dev/null 2>&1; then
+    run git -C "$1" apply "$2"
+  else
+    echo "cannot apply $2 to $1 - is the checkout at the pinned commit?" >&2
+    exit 1
+  fi
+}
+[[ "${SETUP_SAM3D}" == "1" ]] && apply_patch_once "${SAM3D_DIR}" "${ROOT}/patches/sam-3d-objects_gsplat_sm120.patch"
 [[ "${SETUP_VGGT}" == "1" ]] && setup_source "VGGT" "third_party/vggt" "${VGGT_URL}" "${VGGT_COMMIT}" "vggt/models/vggt.py" 0
 [[ "${SETUP_LYRA}" == "1" ]] && setup_source "Lyra" "third_party/lyra" "${LYRA_URL}" "${LYRA_COMMIT}" "Lyra-2/lyra_2/_src/inference/lyra2_zoomgs_inference.py" 1
 [[ "${SETUP_HUNYUAN}" == "1" ]] && setup_source "Hunyuan3D-Part" "third_party/Hunyuan3D-Part" "${HUNYUAN_URL}" "${HUNYUAN_COMMIT}" "P3-SAM/demo/app.py" 0

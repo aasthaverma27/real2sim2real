@@ -228,6 +228,8 @@ install_lyra() {
     -e "${ROOT}/third_party/lyra/Lyra-2/lyra_2/_src/inference/vipe"
   build_pip_install "${LYRA_ENV}" --no-build-isolation \
     -e "${ROOT}/third_party/lyra/Lyra-2/lyra_2/_src/inference/depth_anything_3[gs]"
+  # COLMAP and the splat tools (colmap_from_video, train_gs, align_splat_auto)
+  pip_install "${LYRA_ENV}" pycolmap==4.1.1 plyfile==1.1.3
   pip_install "${LYRA_ENV}" -e "${ROOT}" --no-deps
 }
 
@@ -266,7 +268,7 @@ verify_envs() {
   fi
   if [[ "${INSTALL_LYRA}" == "1" ]]; then
     run env PYTHONPATH="${ROOT}/third_party/lyra/Lyra-2" "${CONDA_BIN}" run -n "${LYRA_ENV}" python -c \
-      "import depth_anything_3.api, flash_attn, moge.model.v1, torch, transformer_engine.pytorch, vipe_ext; print('lyra', torch.__version__)"
+      "import depth_anything_3.api, flash_attn, moge.model.v1, plyfile, pycolmap, torch, transformer_engine.pytorch, vipe_ext; print('lyra', torch.__version__)"
   fi
   if [[ "${INSTALL_SIM}" == "1" ]]; then
     run "${CONDA_BIN}" run -n "${SIM_ENV}" python -c \
@@ -321,20 +323,13 @@ write_paths_env() {
     printf 'export RS_PY_ASSET="${RS_PY_ASSET:-%s}"\n' "${py_asset}"
     printf 'export RS_PY_LYRA="${RS_PY_LYRA:-%s}"\n' "${py_lyra}"
     printf 'export RS_PY_SAM3="${RS_PY_SAM3:-%s}"\n\n' "${py_sam3}"
-    printf '# --- whole-body controller policies (optional) ---------------------\n'
-    printf '# Two .onnx files. Needed only for the bundled in-process controller\n'
-    printf '# (scripts/realsim/start.sh --builtin).\n'
-    printf 'export RS_WBC_MODELS="${RS_WBC_MODELS:-%s/external/simple_wbc_code/models}"\n\n' "${ROOT}"
-    printf '# --- deployed control stack (optional) -----------------------------\n'
-    printf 'export RS_DEPLOY_ROOT="${RS_DEPLOY_ROOT:-%s/external/vla_for_simulation_testing}"\n' "${ROOT}"
-    printf 'export RS_PY_DDS="${RS_PY_DDS:-$RS_DEPLOY_ROOT/.venv_sim/bin/python}"\n\n'
-    printf '# --- VLA policy server (optional) ----------------------------------\n'
-    printf 'export RS_GROOT_ROOT="${RS_GROOT_ROOT:-%s/external/Isaac-GR00T}"\n' "${ROOT}"
-    printf 'export RS_GROOT_PY="${RS_GROOT_PY:-$RS_PY_SIM}"\n'
-    printf 'export RS_GROOT_CHECKPOINT="${RS_GROOT_CHECKPOINT:-}"\n'
-    printf 'export RS_GROOT_EMBODIMENT="${RS_GROOT_EMBODIMENT:-}"\n\n'
-    printf '# --- optional room-mesh path ---------------------------------------\n'
-    printf 'export RS_OPENMVS_BIN="${RS_OPENMVS_BIN:-}"\n\n'
+    printf '# --- NVIDIA GR00T-WholeBodyControl (scripts/setup_external.sh) -----\n'
+    printf 'export RS_DEPLOY_ROOT="${RS_DEPLOY_ROOT:-%s/external/GR00T-WholeBodyControl}"\n' "${ROOT}"
+    printf 'export RS_PY_DDS="${RS_PY_DDS:-$RS_DEPLOY_ROOT/.venv_sim/bin/python}"\n'
+    printf 'export RS_WBC_MODELS="${RS_WBC_MODELS:-$RS_DEPLOY_ROOT/decoupled_wbc/sim2mujoco/resources/robots/g1/policy}"\n\n'
+    printf '# --- the real robot camera server (calibration only) ---------------\n'
+    printf '# 192.168.123.164 is the G1 onboard computer on the Unitree network.\n'
+    printf 'export RS_ROBOT_CAMERA="${RS_ROBOT_CAMERA:-tcp://192.168.123.164:5555}"\n\n'
     printf '# --- display and the shared-GPU ceiling ----------------------------\n'
     printf 'export DISPLAY="${DISPLAY:-:0}"\n'
     printf 'export RS_VRAM_CEILING_MIB="${RS_VRAM_CEILING_MIB:-31000}"\n'

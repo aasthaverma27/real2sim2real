@@ -70,6 +70,27 @@ def body_extents(model, data, body_name: str) -> tuple[np.ndarray, np.ndarray]:
     return P.min(0), P.max(0)
 
 
+def mesh_bodies(xml: Path) -> list[str]:
+    """Every body in the scene that owns mesh geometry.
+
+    The scale factor has to reach all of them. Naming them by hand means a
+    scene whose objects came out in a different order gets some of its bodies
+    scaled and the rest left at reconstruction size, which does not look like
+    an error - it looks like a basket the size of a room.
+    """
+    model = mujoco.MjModel.from_xml_path(str(xml))
+    out = []
+    for b in range(model.nbody):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b)
+        if not name:
+            continue
+        if any(model.geom_bodyid[g] == b
+               and model.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH
+               for g in range(model.ngeom)):
+            out.append(name)
+    return out
+
+
 def measure(xml: Path, bodies: list[str]) -> dict:
     model = mujoco.MjModel.from_xml_path(str(xml))
     data = mujoco.MjData(model)
@@ -101,7 +122,12 @@ def main() -> int:
                         "factor derived from the table. Warns above 10%% error.")
     a = p.parse_args()
 
-    bodies = [a.table_body, a.basket_body, a.apple_body]
+    bodies = mesh_bodies(a.scene)
+    if a.table_body not in bodies:
+        raise SystemExit(
+            f"--table-body {a.table_body!r} is not in the scene. Bodies with "
+            f"meshes: {', '.join(bodies)}")
+    print(f"[rescale] {len(bodies)} mesh bodies: {', '.join(bodies)}")
     before = measure(a.scene, bodies)
     floor_z = before["_floor_z"]
 
@@ -119,16 +145,20 @@ def main() -> int:
               f" x {s[2]*factor:.3f} m")
 
     # independent check: the basket was measured separately, and the factor
-    # above never looked at it
-    bs = np.sort(before[a.basket_body]["size"][:2])[::-1] * factor
-    want = np.sort(np.asarray(a.check_basket))[::-1]
-    err = np.abs(bs - want) / want
-    print(f"[rescale] basket check: predicted {bs[0]:.3f} x {bs[1]:.3f} m vs "
-          f"measured {want[0]:.3f} x {want[1]:.3f} m "
-          f"(error {100*err[0]:.1f}%, {100*err[1]:.1f}%)")
-    if err.max() > 0.10:
-        print(f"[rescale] WARNING: basket is off by {100*err.max():.0f}% - the "
-              f"global-scale assumption may not hold for this scene")
+    # above never looked at it. Only meaningful when that body is in this scene.
+    if a.basket_body in before:
+        bs = np.sort(before[a.basket_body]["size"][:2])[::-1] * factor
+        want = np.sort(np.asarray(a.check_basket))[::-1]
+        err = np.abs(bs - want) / want
+        print(f"[rescale] basket check: predicted {bs[0]:.3f} x {bs[1]:.3f} m vs "
+              f"measured {want[0]:.3f} x {want[1]:.3f} m "
+              f"(error {100*err[0]:.1f}%, {100*err[1]:.1f}%)")
+        if err.max() > 0.10:
+            print(f"[rescale] WARNING: basket is off by {100*err.max():.0f}% - the "
+                  f"global-scale assumption may not hold for this scene")
+    else:
+        print(f"[rescale] no independent check ({a.basket_body!r} not in this "
+              f"scene); pass --basket-body/--check-basket to cross-check the factor")
 
     # stamp scale onto every mesh declaration belonging to each body
     tree = ET.parse(a.scene)
@@ -184,7 +214,8 @@ def main() -> int:
     tree = ET.parse(a.output)
     root = tree.getroot()
     body_el = {b.get("name"): b for b in root.iter("body")}
-    for name in (a.basket_body, a.apple_body):
+    for name in (n for n in bodies if n != a.table_body):
+        # Every object that is not the support surface gets seated on it.
         # z only. The xy layout was already scaled when the body positions were
         # multiplied by the global factor; scaling the offset from the table
         # centre a second time pulls the objects together by factor^2 - at 0.597
@@ -203,6 +234,11 @@ def main() -> int:
               f"  size {s[0]:.3f}x{s[1]:.3f}x{s[2]:.3f}  bottom z={lo[2]:+.3f}")
 
     summary = {
+        # The global similarity this script applied, kept so that anything
+        # placing geometry in this scene later can reconstruct the same frame
+        # without guessing: p_scene = factor * (p_reconstruction - [0,0,floor_z])
+        "factor": float(factor),
+        "floor_z": float(floor_z),
         "scales": {k: float(v) for k, v in scales.items()},
         "table_top_z": top_z,
         "table_centre_xy": [float(t_ctr[0]), float(t_ctr[1])],

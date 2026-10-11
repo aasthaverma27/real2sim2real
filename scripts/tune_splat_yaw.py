@@ -52,13 +52,16 @@ def basis_from_up(up: np.ndarray) -> np.ndarray:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--ply", type=Path, default=Path("outputs/g1_ok/gs_wide.ply"))
-    p.add_argument("--poses", type=Path,
-                   default=Path("outputs/g1_ok/roommesh/colmap_poses.json"))
-    p.add_argument("--photo", type=Path, default=Path("outputs/g1_ok/image.png"))
-    p.add_argument("--scene", type=Path,
-                   default=Path("outputs/g1_ok/mujoco/scene_g1.xml"))
-    p.add_argument("--out", type=Path, default=Path("outputs/g1_ok/gs_yaw_manual.json"))
+    p.add_argument("--scene-dir", type=Path, default=None,
+                   help="fills in every path below from a build_sim_scene.sh "
+                        "scene directory")
+    p.add_argument("--ply", type=Path, default=None, help="<scene>/gs_wide.ply")
+    p.add_argument("--poses", type=Path, default=None,
+                   help="<scene>/roommesh/colmap_poses.json")
+    p.add_argument("--photo", type=Path, default=None, help="<scene>/inputs/frame0.png")
+    p.add_argument("--scene", type=Path, default=None,
+                   help="<scene>/mujoco/scene_scaled.xml")
+    p.add_argument("--out", type=Path, default=None, help="<scene>/gs_yaw_manual.json")
     p.add_argument("--scale", type=float, default=0.5075)
     p.add_argument("--yaw", type=float, default=309.25, help="starting yaw")
     p.add_argument("--table-h", type=float, default=-1.1550)
@@ -68,6 +71,17 @@ def main() -> int:
     p.add_argument("--opacity", type=float, default=0.03)
     p.add_argument("--pos", type=int, nargs=2, default=[30, 40])
     a = p.parse_args()
+    sd = a.scene_dir
+    if sd is not None:
+        a.ply = a.ply or sd / "gs_wide.ply"
+        a.poses = a.poses or sd / "roommesh" / "colmap_poses.json"
+        a.photo = a.photo or sd / "inputs" / "frame0.png"
+        a.scene = a.scene or sd / "mujoco" / "scene_scaled.xml"
+        a.out = a.out or sd / "gs_yaw_manual.json"
+    missing = [k for k in ("ply", "poses", "photo", "scene", "out")
+               if getattr(a, k) is None]
+    if missing:
+        p.error("pass --scene-dir, or all of: " + ", ".join("--" + m for m in missing))
 
     import cv2
     import mujoco
@@ -93,6 +107,12 @@ def main() -> int:
     mujoco.mj_resetData(model, data)
     mujoco.mj_forward(model, data)
     ci = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "cap")
+    if ci < 0:
+        raise SystemExit(
+            f"{a.scene} has no camera named 'cap' (the pose the object photo was "
+            "taken from). Add one at that pose - <camera name=\"cap\" pos=... "
+            "xyaxes=... fovy=.../> in the worldbody - or pass --scene with a "
+            "scene that has it.")
     Ccap = data.cam_xpos[ci].copy()
     Rocv = data.cam_xmat[ci].reshape(3, 3) @ np.diag([1.0, -1.0, -1.0])
     fovy = float(model.cam_fovy[ci])
@@ -176,9 +196,8 @@ def main() -> int:
             a.out.write_text(json.dumps(dict(yaw_deg=yaw, scale=a.scale), indent=1))
             print(f"\nsaved yaw {yaw:.2f} deg, scale {a.scale} -> {a.out}")
             print("bake it with:")
-            print(f"  scripts/apply_splat_transform.py --ply {a.ply} \\")
-            print(f"      --out outputs/g1_ok/gs_world.ply \\")
-            print(f"      --scale {a.scale} --yaw {yaw:.2f} --min-opacity 0.02")
+            print("re-run the build from the align stage with:")
+            print(f"  --splat-scale {a.scale} --splat-yaw {yaw:.2f} --from align")
             break
     cv2.destroyAllWindows()
     return 0

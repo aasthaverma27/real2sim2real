@@ -1,0 +1,166 @@
+{
+  "status": "ok",
+  "scene_dir": "outputs/new_env",
+  "foreground_glb": "outputs/new_env/refined_scene.glb",
+  "background_ply": null,
+  "output_foreground": "outputs/new_env/gravity_aligned_foreground.glb",
+  "output_background": "outputs/new_env/gravity_aligned_background.ply",
+  "background_status": "missing",
+  "point_selection": {
+    "vggt_dir": "/mnt/ssd2/robosnap/outputs/new_env/depth",
+    "plane_mask": "/mnt/ssd2/robosnap/outputs/new_env/support_mask.png",
+    "used_mask": true,
+    "valid_points": 11345
+  },
+  "plane_normal_camera": [
+    -0.031524814855460145,
+    -0.918988618393762,
+    -0.3930217618797379
+  ],
+  "plane_normal_vggt_camera": [
+    0.00023114273342906535,
+    -0.9442792160223583,
+    -0.32914542190532936
+  ],
+  "plane_center_camera": [
+    0.0013423182992184238,
+    0.19999194306501544,
+    0.5368052378448789
+  ],
+  "plane_center_vggt_camera": [
+    -0.004847640698812293,
+    0.019546732090873067,
+    0.45963464691441364
+  ],
+  "inlier_count": 7360,
+  "target_up": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "transform_gravity_from_camera": [
+    [
+      0.9983626860252046,
+      -0.04772979363948528,
+      0.031524814855460145,
+      -0.008717232067156667
+    ],
+    [
+      -0.04772979363948528,
+      -0.3913844479049423,
+      0.918988618393762,
+      -0.4149800990762421
+    ],
+    [
+      -0.031524814855460145,
+      -0.918988618393762,
+      -0.3930217618797378,
+      0.3948087761471284
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "transform_gravity_from_background": [
+    [
+      0.9983626860252046,
+      -0.04772979363948528,
+      0.031524814855460145,
+      -0.008717232067156667
+    ],
+    [
+      -0.04772979363948528,
+      -0.3913844479049423,
+      0.918988618393762,
+      -0.4149800990762421
+    ],
+    [
+      -0.031524814855460145,
+      -0.918988618393762,
+      -0.3930217618797378,
+      0.3948087761471284
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "background_cameras": null,
+  "camera_alignment": {
+    "status": "identity_same_camera_world",
+    "foreground_w2c": [
+      [
+        1.0,
+        -0.0001040191637002863,
+        -1.924271600728389e-05,
+        -2.4600376491434872e-06
+      ],
+      [
+        0.00010401890176581219,
+        1.0,
+        -1.3453557585307863e-05,
+        -4.202408945275238e-06
+      ],
+      [
+        1.924411662912462e-05,
+        1.345155578746926e-05,
+        1.0,
+        0.00013525481335818768
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "camera_origin_in_gravity": [
+    -0.008719242586850928,
+    -0.415106158064666,
+    0.39485799673022615
+  ],
+  "support_object": {
+    "status": "ok",
+    "object_id": 0,
+    "mask": "outputs/new_env/sam3d/0.png",
+    "support_mask_coverage": 0.9997086710101171
+  },
+  "support_mesh_gravity": {
+    "status": "ok",
+    "object_id": 0,
+    "mesh": "/mnt/ssd2/robosnap/outputs/new_env/reconstruction/meshes/0_z_up.glb",
+    "pose": "/mnt/ssd2/robosnap/outputs/new_env/depth/object_point_clouds/0_pose_vggt_icp.txt",
+    "selected_faces": 9841,
+    "selected_area": 0.7127280374971182,
+    "median_angular_residual_deg": 2.5753093347322196,
+    "normal_camera": [
+      -0.033191179136499736,
+      -0.9175117223055065,
+      -0.39632131542412885
+    ],
+    "top_plane_offset_camera": -0.3981794811151549,
+    "top_plane_point_camera": [
+      -0.01760471738099343,
+      -0.008792897665607712,
+      1.0265190725087454
+    ],
+    "weight": 0.95,
+    "fused_normal_camera": [
+      -0.031524814855460145,
+      -0.918988618393762,
+      -0.3930217618797379
+    ],
+    "vggt_to_mesh_angle_deg": 4.56554614935663,
+    "gravity_origin_center_camera": [
+      0.0013423182992184238,
+      0.19999194306501544,
+      0.5368052378448789
+    ]
+  }
+}

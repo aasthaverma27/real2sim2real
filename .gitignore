@@ -57,3 +57,6 @@ assets/robots/*/*.dae
 assets/robots/*/*.obj
 
 inputs/
+
+# --- prebuilt scenes shipped with the repo (Git LFS, see .gitattributes) ----
+!scenes/**/*.ply

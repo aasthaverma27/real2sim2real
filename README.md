@@ -35,6 +35,43 @@ ready for VLA fine-tuning (e.g. GR00T N1.x).
                                                               └─► LeRobot exporter ─► dataset
 ```
 
+## Two ways to use this repository
+
+| you want to | do | needs |
+|---|---|---|
+| **use the prebuilt sim** — a reconstructed room with a round table, an apple and a woven basket, ready to teleoperate and record | [Use the prebuilt scene](#use-the-prebuilt-scene) below, then sections 5–6 | the sim environment only: no capture, no model weights |
+| **build a sim of your own room** | sections 1–6 in order | the full install, including the reconstruction models |
+
+### Use the prebuilt scene
+
+The scene lives in [`scenes/new_env/`](scenes/new_env/) (about 155 MB, stored
+with Git LFS). It has passed every check in `verify_scene.py`.
+
+```bash
+sudo apt install git-lfs && git lfs install      # once per machine, before cloning
+git clone https://github.com/MethdAI-Modinoid/real2sim2real.git
+cd real2sim2real
+git lfs pull                                     # meshes and splat; skip if the clone already fetched them
+
+bash scripts/install_auto_pipeline.sh -y --only sim   # just the simulation env + configs/paths.env
+bash scripts/setup_external.sh                        # whole-body controller, teleop, exporter (sections 5-6)
+
+scripts/realsim/start.sh --scene scenes/new_env --builtin        # quick look, in-process balance controller
+scripts/realsim/start.sh --scene scenes/new_env --vla --visual-dr # data collection with the deployed WBC
+```
+
+Wherever the rest of this README says `--scene outputs/myroom`, use
+`--scene scenes/new_env`. If a mesh fails to load with a "file is not a mesh"
+error, the LFS files were not pulled: run `git lfs pull`.
+
+| file | what it is |
+|---|---|
+| `gs_bg_clean.ply` | the room as a Gaussian splat, in metres |
+| `mujoco/scene_g1.xml` | objects + G1 with the calibrated camera rig (rendered) |
+| `mujoco/wbc/scene_wbc.xml` | robot-first scene for the whole-body controller (simulated) |
+| `realsim_view.json` | viewer framing |
+| `object_properties.json` | the assumed density and friction of each object |
+
 ## Contents
 
 1. [Install](#1-install)
@@ -289,6 +326,7 @@ configs/
   visual_randomization.yaml   randomization ranges
 assets/robots/g1/             G1 MJCFs, camera-rig CAD meshes
 calib/                        measured intrinsics of our robot's cameras
+scenes/new_env/               prebuilt, verified scene (Git LFS)
 robosnap/                     object reconstruction package (from RoboSnap)
 third_party/MuGS/             vendored Gaussian-splat sensor
 patches/                      our changes to third-party code
@@ -297,7 +335,8 @@ external/                     submodule: NVIDIA GR00T-WholeBodyControl (controll
 ```
 
 Generated scenes go to `outputs/` and model weights to `checkpoints/`; both
-are gitignored.
+are gitignored. `scenes/` holds prebuilt scenes that ship with the repo
+(Git LFS).
 
 ## 9. Troubleshooting
 

@@ -293,13 +293,6 @@ plus the splat and mirrors that state. They run in a different Python
 environment from the DDS bridge, because no single environment has both
 `unitree_sdk2py` and `gsplat`.
 
-**Compositing.** Following Re3Sim, static support surfaces are not drawn as
-meshes: listed in `realsim_view.json → exclude_geoms`, they keep their
-collision and the splat shows the real surface. MuGS (vendored in
-`third_party/MuGS`, our changes in `patches/` and
-`third_party/MuGS/FORK_NOTES.md`) composites the MuJoCo foreground over the
-gsplat background.
-
 **Camera parity.** The sim renders at each stream's published resolution
 (head 768 × 432, wrists 1280 × 720) with the measured fovy. The camera server
 then applies the real client's anisotropic resize to 640 × 480. The two

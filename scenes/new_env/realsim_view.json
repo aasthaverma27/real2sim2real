@@ -1,0 +1,17 @@
+{
+  "_comment": "Hybrid-window framing. The table is NOT excluded any more: it has been pruned out of the splat entirely, so the mesh is the only table in the scene. That trades photoreal wood for a shape whose position and size are exactly known, and it removes any chance of two tables disagreeing.",
+  "look_at": [
+    0.035,
+    1.0,
+    0.78
+  ],
+  "distance": 1.95,
+  "azimuth": -91.0,
+  "elevation": 21.0,
+  "pos": [
+    0,
+    30
+  ],
+  "fovy": 55.4,
+  "exclude_geoms": "floor,ground,room"
+}

@@ -1,0 +1,208 @@
+<mujoco model="robosnap_scene">
+  <compiler angle="radian" meshdir="assets" texturedir="assets" autolimits="true" balanceinertia="true" />
+  <option gravity="0 0 -9.81" integrator="implicitfast" timestep="0.002" />
+  <statistic center="0 0 0.3" extent="1.5" />
+  <visual>
+    <global offwidth="1920" offheight="1920" />
+    <quality shadowsize="4096" />
+  </visual>
+  <default>
+    <default class="visual">
+      <geom type="mesh" contype="0" conaffinity="0" group="2" density="0" />
+    </default>
+    <default class="collision">
+      <geom type="mesh" group="3" condim="4" friction="1.0 0.02 0.001" density="300" rgba="0.4 0.9 0.4 0.35" />
+    </default>
+  </default>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.5 0.65 0.85" rgb2="0.1 0.15 0.25" width="512" height="512" />
+    <texture name="groundplane" type="2d" builtin="checker" rgb1="0.25 0.26 0.27" rgb2="0.32 0.33 0.34" width="300" height="300" />
+    <material name="groundplane" texture="groundplane" texrepeat="4 4" reflectance="0.1" />
+    <mesh name="obj0_round_wooden_table_visual" file="obj0_round_wooden_table_visual.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <texture name="obj0_round_wooden_table_tex" type="2d" file="obj0_round_wooden_table.png" />
+    <material name="obj0_round_wooden_table_mat" texture="obj0_round_wooden_table_tex" texuniform="false" specular="0.1" shininess="0.1" />
+    <mesh name="obj0_round_wooden_table_coll_0" file="obj0_round_wooden_table_coll_0.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_1" file="obj0_round_wooden_table_coll_1.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_2" file="obj0_round_wooden_table_coll_2.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_3" file="obj0_round_wooden_table_coll_3.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_4" file="obj0_round_wooden_table_coll_4.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_5" file="obj0_round_wooden_table_coll_5.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_6" file="obj0_round_wooden_table_coll_6.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_7" file="obj0_round_wooden_table_coll_7.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_8" file="obj0_round_wooden_table_coll_8.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_9" file="obj0_round_wooden_table_coll_9.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_10" file="obj0_round_wooden_table_coll_10.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_11" file="obj0_round_wooden_table_coll_11.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_12" file="obj0_round_wooden_table_coll_12.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_13" file="obj0_round_wooden_table_coll_13.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_14" file="obj0_round_wooden_table_coll_14.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_15" file="obj0_round_wooden_table_coll_15.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_16" file="obj0_round_wooden_table_coll_16.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_17" file="obj0_round_wooden_table_coll_17.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj0_round_wooden_table_coll_18" file="obj0_round_wooden_table_coll_18.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_visual" file="obj1_red_apple_visual.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <texture name="obj1_red_apple_tex" type="2d" file="obj1_red_apple.png" />
+    <material name="obj1_red_apple_mat" texture="obj1_red_apple_tex" texuniform="false" specular="0.1" shininess="0.1" />
+    <mesh name="obj1_red_apple_coll_0" file="obj1_red_apple_coll_0.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_1" file="obj1_red_apple_coll_1.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_2" file="obj1_red_apple_coll_2.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_3" file="obj1_red_apple_coll_3.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_4" file="obj1_red_apple_coll_4.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_5" file="obj1_red_apple_coll_5.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_6" file="obj1_red_apple_coll_6.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_7" file="obj1_red_apple_coll_7.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_8" file="obj1_red_apple_coll_8.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj1_red_apple_coll_9" file="obj1_red_apple_coll_9.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_visual" file="obj2_woven_brown_basket_visual.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <texture name="obj2_woven_brown_basket_tex" type="2d" file="obj2_woven_brown_basket.png" />
+    <material name="obj2_woven_brown_basket_mat" texture="obj2_woven_brown_basket_tex" texuniform="false" specular="0.1" shininess="0.1" />
+    <mesh name="obj2_woven_brown_basket_coll_0" file="obj2_woven_brown_basket_coll_0.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_1" file="obj2_woven_brown_basket_coll_1.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_2" file="obj2_woven_brown_basket_coll_2.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_3" file="obj2_woven_brown_basket_coll_3.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_4" file="obj2_woven_brown_basket_coll_4.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_5" file="obj2_woven_brown_basket_coll_5.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_6" file="obj2_woven_brown_basket_coll_6.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_7" file="obj2_woven_brown_basket_coll_7.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_8" file="obj2_woven_brown_basket_coll_8.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_9" file="obj2_woven_brown_basket_coll_9.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_10" file="obj2_woven_brown_basket_coll_10.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_11" file="obj2_woven_brown_basket_coll_11.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_12" file="obj2_woven_brown_basket_coll_12.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_13" file="obj2_woven_brown_basket_coll_13.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_14" file="obj2_woven_brown_basket_coll_14.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_15" file="obj2_woven_brown_basket_coll_15.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_16" file="obj2_woven_brown_basket_coll_16.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_17" file="obj2_woven_brown_basket_coll_17.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_18" file="obj2_woven_brown_basket_coll_18.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_19" file="obj2_woven_brown_basket_coll_19.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_20" file="obj2_woven_brown_basket_coll_20.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_21" file="obj2_woven_brown_basket_coll_21.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_22" file="obj2_woven_brown_basket_coll_22.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_23" file="obj2_woven_brown_basket_coll_23.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_24" file="obj2_woven_brown_basket_coll_24.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_25" file="obj2_woven_brown_basket_coll_25.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_26" file="obj2_woven_brown_basket_coll_26.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_27" file="obj2_woven_brown_basket_coll_27.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_28" file="obj2_woven_brown_basket_coll_28.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_29" file="obj2_woven_brown_basket_coll_29.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_30" file="obj2_woven_brown_basket_coll_30.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_31" file="obj2_woven_brown_basket_coll_31.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_32" file="obj2_woven_brown_basket_coll_32.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_33" file="obj2_woven_brown_basket_coll_33.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_34" file="obj2_woven_brown_basket_coll_34.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_35" file="obj2_woven_brown_basket_coll_35.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_36" file="obj2_woven_brown_basket_coll_36.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_37" file="obj2_woven_brown_basket_coll_37.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_38" file="obj2_woven_brown_basket_coll_38.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_39" file="obj2_woven_brown_basket_coll_39.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_40" file="obj2_woven_brown_basket_coll_40.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_41" file="obj2_woven_brown_basket_coll_41.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_42" file="obj2_woven_brown_basket_coll_42.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_43" file="obj2_woven_brown_basket_coll_43.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_44" file="obj2_woven_brown_basket_coll_44.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_45" file="obj2_woven_brown_basket_coll_45.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_46" file="obj2_woven_brown_basket_coll_46.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_47" file="obj2_woven_brown_basket_coll_47.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_48" file="obj2_woven_brown_basket_coll_48.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_49" file="obj2_woven_brown_basket_coll_49.obj" scale="1.641813031 1.641813031 1.641813031" />
+    <mesh name="obj2_woven_brown_basket_coll_50" file="obj2_woven_brown_basket_coll_50.obj" scale="1.641813031 1.641813031 1.641813031" />
+  </asset>
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1" directional="true" diffuse="0.7 0.7 0.7" />
+    <light pos="1 -1 2.5" dir="-0.4 0.4 -1" diffuse="0.3 0.3 0.3" />
+    <geom name="floor" type="plane" size="0 0 0.05" pos="0.0 0.0 0" material="groundplane" condim="3" />
+    <camera name="scene_view" pos="1.4 -1.4 1.2" xyaxes="0.7 0.7 0 -0.35 0.35 0.87" />
+    <body name="obj0_round_wooden_table" pos="0.050498 1.116695 0.376600" quat="0.902557 0.001337 -0.000742 -0.430569">
+      <geom name="obj0_round_wooden_table_vis" class="visual" mesh="obj0_round_wooden_table_visual" material="obj0_round_wooden_table_mat" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_0" name="obj0_round_wooden_table_coll_0_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_1" name="obj0_round_wooden_table_coll_1_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_2" name="obj0_round_wooden_table_coll_2_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_3" name="obj0_round_wooden_table_coll_3_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_4" name="obj0_round_wooden_table_coll_4_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_5" name="obj0_round_wooden_table_coll_5_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_6" name="obj0_round_wooden_table_coll_6_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_7" name="obj0_round_wooden_table_coll_7_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_8" name="obj0_round_wooden_table_coll_8_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_9" name="obj0_round_wooden_table_coll_9_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_10" name="obj0_round_wooden_table_coll_10_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_11" name="obj0_round_wooden_table_coll_11_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_12" name="obj0_round_wooden_table_coll_12_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_13" name="obj0_round_wooden_table_coll_13_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_14" name="obj0_round_wooden_table_coll_14_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_15" name="obj0_round_wooden_table_coll_15_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_16" name="obj0_round_wooden_table_coll_16_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_17" name="obj0_round_wooden_table_coll_17_g" />
+      <geom class="collision" mesh="obj0_round_wooden_table_coll_18" name="obj0_round_wooden_table_coll_18_g" />
+    </body>
+    <body name="obj1_red_apple" pos="0.165159 0.833147 0.786340" quat="0.992904 -0.008927 -0.007138 0.118367">
+      <freejoint name="obj1_red_apple_free" />
+      <geom name="obj1_red_apple_vis" class="visual" mesh="obj1_red_apple_visual" material="obj1_red_apple_mat" />
+      <geom class="collision" mesh="obj1_red_apple_coll_0" name="obj1_red_apple_coll_0_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_1" name="obj1_red_apple_coll_1_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_2" name="obj1_red_apple_coll_2_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_3" name="obj1_red_apple_coll_3_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_4" name="obj1_red_apple_coll_4_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_5" name="obj1_red_apple_coll_5_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_6" name="obj1_red_apple_coll_6_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_7" name="obj1_red_apple_coll_7_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_8" name="obj1_red_apple_coll_8_g" />
+      <geom class="collision" mesh="obj1_red_apple_coll_9" name="obj1_red_apple_coll_9_g" />
+    </body>
+    <body name="obj2_woven_brown_basket" pos="-0.006237 0.860764 0.793456" quat="0.994278 0.001234 -0.003841 0.106743">
+      <freejoint name="obj2_woven_brown_basket_free" />
+      <geom name="obj2_woven_brown_basket_vis" class="visual" mesh="obj2_woven_brown_basket_visual" material="obj2_woven_brown_basket_mat" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_0" name="obj2_woven_brown_basket_coll_0_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_1" name="obj2_woven_brown_basket_coll_1_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_2" name="obj2_woven_brown_basket_coll_2_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_3" name="obj2_woven_brown_basket_coll_3_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_4" name="obj2_woven_brown_basket_coll_4_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_5" name="obj2_woven_brown_basket_coll_5_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_6" name="obj2_woven_brown_basket_coll_6_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_7" name="obj2_woven_brown_basket_coll_7_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_8" name="obj2_woven_brown_basket_coll_8_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_9" name="obj2_woven_brown_basket_coll_9_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_10" name="obj2_woven_brown_basket_coll_10_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_11" name="obj2_woven_brown_basket_coll_11_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_12" name="obj2_woven_brown_basket_coll_12_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_13" name="obj2_woven_brown_basket_coll_13_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_14" name="obj2_woven_brown_basket_coll_14_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_15" name="obj2_woven_brown_basket_coll_15_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_16" name="obj2_woven_brown_basket_coll_16_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_17" name="obj2_woven_brown_basket_coll_17_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_18" name="obj2_woven_brown_basket_coll_18_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_19" name="obj2_woven_brown_basket_coll_19_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_20" name="obj2_woven_brown_basket_coll_20_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_21" name="obj2_woven_brown_basket_coll_21_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_22" name="obj2_woven_brown_basket_coll_22_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_23" name="obj2_woven_brown_basket_coll_23_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_24" name="obj2_woven_brown_basket_coll_24_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_25" name="obj2_woven_brown_basket_coll_25_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_26" name="obj2_woven_brown_basket_coll_26_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_27" name="obj2_woven_brown_basket_coll_27_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_28" name="obj2_woven_brown_basket_coll_28_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_29" name="obj2_woven_brown_basket_coll_29_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_30" name="obj2_woven_brown_basket_coll_30_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_31" name="obj2_woven_brown_basket_coll_31_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_32" name="obj2_woven_brown_basket_coll_32_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_33" name="obj2_woven_brown_basket_coll_33_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_34" name="obj2_woven_brown_basket_coll_34_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_35" name="obj2_woven_brown_basket_coll_35_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_36" name="obj2_woven_brown_basket_coll_36_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_37" name="obj2_woven_brown_basket_coll_37_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_38" name="obj2_woven_brown_basket_coll_38_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_39" name="obj2_woven_brown_basket_coll_39_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_40" name="obj2_woven_brown_basket_coll_40_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_41" name="obj2_woven_brown_basket_coll_41_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_42" name="obj2_woven_brown_basket_coll_42_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_43" name="obj2_woven_brown_basket_coll_43_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_44" name="obj2_woven_brown_basket_coll_44_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_45" name="obj2_woven_brown_basket_coll_45_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_46" name="obj2_woven_brown_basket_coll_46_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_47" name="obj2_woven_brown_basket_coll_47_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_48" name="obj2_woven_brown_basket_coll_48_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_49" name="obj2_woven_brown_basket_coll_49_g" />
+      <geom class="collision" mesh="obj2_woven_brown_basket_coll_50" name="obj2_woven_brown_basket_coll_50_g" />
+    </body>
+  </worldbody>
+</mujoco>

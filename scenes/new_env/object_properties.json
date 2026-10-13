@@ -1,0 +1,23 @@
+{
+  "obj_0": {
+    "name": "the round wooden table",
+    "material": "table",
+    "density": 650.0,
+    "friction": 0.6,
+    "source": "lookup"
+  },
+  "obj_1": {
+    "name": "the red apple",
+    "material": "unknown",
+    "density": 400.0,
+    "friction": 0.6,
+    "source": "lookup"
+  },
+  "obj_2": {
+    "name": "the woven brown basket",
+    "material": "basket",
+    "density": 250.0,
+    "friction": 0.7,
+    "source": "lookup"
+  }
+}

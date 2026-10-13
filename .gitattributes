@@ -1,0 +1,5 @@
+scenes/**/*.ply filter=lfs diff=lfs merge=lfs -text
+scenes/**/*.obj filter=lfs diff=lfs merge=lfs -text
+scenes/**/*.STL filter=lfs diff=lfs merge=lfs -text
+scenes/**/*.stl filter=lfs diff=lfs merge=lfs -text
+scenes/**/*.png filter=lfs diff=lfs merge=lfs -text

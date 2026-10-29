@@ -392,7 +392,7 @@ and model weights keep their own licenses.
 ```bibtex
 @misc{real2sim2real2026,
   title        = {Real2Sim2Real: Photoreal Digital Twins from a Phone Video for Training Humanoid VLA Policies},
-  author       = {Verma, Aastha},
+  author       = {Aastha Verma},
   year         = {2026},
   howpublished = {\url{https://github.com/aasthaverma27/real2sim2real}}
 }

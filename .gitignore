@@ -60,3 +60,6 @@ inputs/
 
 # --- prebuilt scenes shipped with the repo (Git LFS, see .gitattributes) ----
 !scenes/**/*.ply
+
+# per-session logs the sim writes next to a scene (run_mujoco_wbc_sim.py)
+scenes/*/episode_layouts/

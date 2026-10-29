@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import math
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -99,6 +100,7 @@ class MujocoWBCSim:
         visual_dr: bool = False,
         visual_seed: int | None = None,
         control_port: int = 0,
+        fruits: list | None = None,
     ):
         self.mjcf_path = Path(mjcf_path)
 
@@ -245,6 +247,38 @@ class MujocoWBCSim:
             self.initial_hold = self._get_initial_joint_positions()
 
         # ----------------------------------------------------
+        # Spawn pose
+        #
+        # A scene can pin the joint angles the robot spawns with and returns to
+        # on every reset: <scene>/spawn_pose.json {"joints": {name: rad}}. Use it
+        # to match the pose the WBC holds at rest, or the arms jump on reset.
+        # "lateral_jitter_m": d also slides the robot sideways (along its own
+        # left, never toward or away from the table) by U(-d, d) on every reset.
+        # ----------------------------------------------------
+
+        self.spawn_pose = {}
+        self.lateral_jitter = 0.0
+        self.last_sideways = 0.0
+        self.spawn_rng = np.random.default_rng(seed)
+        sp = Path(scene_dir) / "spawn_pose.json" if scene_dir else None
+        if sp is not None and sp.exists():
+            cfg = json.loads(sp.read_text())
+            for jn, v in cfg.get("joints", {}).items():
+                jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+                if jid < 0:
+                    raise ValueError(f"{sp}: no joint {jn!r}")
+                self.spawn_pose[int(self.model.jnt_qposadr[jid])] = float(v)
+            self.lateral_jitter = float(cfg.get("lateral_jitter_m", 0.0))
+            fb = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "floating_base_joint")
+            self.base_adr = int(self.model.jnt_qposadr[fb])
+            w, x, y, z = self.model.qpos0[self.base_adr + 3:self.base_adr + 7]
+            yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+            self.base_left = np.array([-np.sin(yaw), np.cos(yaw)])
+            print(f"[sim] spawn pose from {sp}: {cfg.get('joints', {})}, "
+                  f"sideways jitter +-{self.lateral_jitter*100:.1f} cm")
+            self.apply_spawn_pose()
+
+        # ----------------------------------------------------
         # Table-top layout randomization
         #
         # The viewer's backspace resets qpos to qpos0, which puts the apple and
@@ -265,25 +299,69 @@ class MujocoWBCSim:
             _here = str(Path(__file__).resolve().parent / "realsim")
             if _here not in _sys.path:
                 _sys.path.insert(0, _here)
-            try:
-                from randomize_objects import TableRandomizer
-                self.randomizer = TableRandomizer(
-                    self.model, self.data, seed=seed,
-                    reach=(reach_min, reach_max),
-                    reach_overrides={"apple": (apple_reach_min,
-                                               apple_reach_max)})
-                print(f"[sim] object randomization on: "
-                      f"{[i['name'] for i in self.randomizer.items]} "
-                      f"reach {reach_min:.2f}-{reach_max:.2f} m "
-                      f"(apple {apple_reach_min:.2f}-{apple_reach_max:.2f} m)")
+            pb_cfg = Path(scene_dir) / "layout_random.json" if scene_dir else None
+            if pb_cfg is not None and pb_cfg.exists():
+                # Plate + fruits + basket scenes (layout_random.json):
+                # the plate and basket keep or swap their photo spots, jittered,
+                # and the fruits are shuffled on the plate.
+                from randomize_plate_basket import PlateBasketRandomizer
+                pb = json.loads(pb_cfg.read_text())
+                if fruits:
+                    pb["only_fruits"] = fruits
+                self.randomizer = PlateBasketRandomizer(self.model, self.data, pb, seed=seed)
+                self.randomizer.park(self.data)
+                mujoco.mj_forward(self.model, self.data)
+                print(f"[sim] object randomization on ({pb_cfg.name}): "
+                      f"{[i['name'] for i in self.randomizer.items]}")
                 if self.randomize_on_reset:
                     self.randomize_layout()
-                else:
-                    print("[sim] layout reshuffle off: objects only move when "
-                          "placed (exact replay)")
-            except Exception as exc:
-                self.randomizer = None
-                print(f"[sim] object randomization off: {exc}")
+            else:
+                try:
+                    from randomize_objects import TableRandomizer
+                    self.randomizer = TableRandomizer(
+                        self.model, self.data, seed=seed,
+                        reach=(reach_min, reach_max),
+                        reach_overrides={"apple": (apple_reach_min,
+                                                   apple_reach_max)})
+                    print(f"[sim] object randomization on: "
+                          f"{[i['name'] for i in self.randomizer.items]} "
+                          f"reach {reach_min:.2f}-{reach_max:.2f} m "
+                          f"(apple {apple_reach_min:.2f}-{apple_reach_max:.2f} m)")
+                    if self.randomize_on_reset:
+                        self.randomize_layout()
+                    else:
+                        print("[sim] layout reshuffle off: objects only move when "
+                              "placed (exact replay)")
+                except Exception as exc:
+                    self.randomizer = None
+                    print(f"[sim] object randomization off: {exc}")
+
+        # ----------------------------------------------------
+        # Per-episode layout log
+        #
+        # <scene>/episode_layouts/<session>.jsonl: one "reset" line per episode
+        # (layout drawn, robot offset, visual seed, every object's pose) and a
+        # "poses" line every 0.5 s, so a recorded episode's start layout and end
+        # state can be looked up by wall-clock time.
+        # ----------------------------------------------------
+
+        self.layout_log = None
+        self.reset_count = 0
+        self._next_pose_log = 0.0
+        if scene_dir:
+            d = Path(scene_dir) / "episode_layouts"
+            d.mkdir(exist_ok=True)
+            self.layout_log_path = d / f"{time.strftime('%Y-%m-%d-%H-%M-%S')}.jsonl"
+            self.layout_log = open(self.layout_log_path, "a", buffering=1)
+            fb = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "floating_base_joint")
+            self._log_base = int(self.model.jnt_qposadr[fb]) if fb >= 0 else None
+            self._log_objs = [
+                (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY,
+                                   int(self.model.jnt_bodyid[j])), int(self.model.jnt_qposadr[j]))
+                for j in range(self.model.njnt)
+                if self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE and j != fb]
+            print(f"[sim] episode layout log: {self.layout_log_path}")
+            self.log_reset("start")
 
         # ----------------------------------------------------
         # Timing
@@ -1323,8 +1401,53 @@ class MujocoWBCSim:
         mujoco.mj_forward(self.model, self.data)
         print("[sim] placed " + "  ".join(out), flush=True)
 
+    def _object_poses(self):
+        q = self.data.qpos
+        # [x, y, z, qw, qx, qy, qz] per free body, world frame
+        out = {n: np.round(q[a:a + 7], 4).tolist() for n, a in self._log_objs}
+        if self._log_base is not None:
+            out["robot_base"] = np.round(q[self._log_base:self._log_base + 7], 4).tolist()
+        return out
+
+    def log_reset(self, cause):
+        if self.layout_log is None:
+            return
+        self.reset_count += 1
+        rz = self.randomizer
+        rec = {"t": round(time.time(), 3), "type": "reset", "reset": self.reset_count,
+               "cause": str(cause), "visual_seed": int(self.visual_seed),
+               "robot_sideways_m": round(self.last_sideways, 4),
+               "layout": getattr(rz, "last", None),
+               "fruits": [i["name"] for i in getattr(rz, "items", [])[2:]]
+               if hasattr(rz, "park") else None,
+               "poses": self._object_poses()}
+        self.layout_log.write(json.dumps(rec) + "\n")
+
+    def log_poses(self, period=0.5):
+        if self.layout_log is None or time.time() < self._next_pose_log:
+            return
+        self._next_pose_log = time.time() + period
+        self.layout_log.write(json.dumps({"t": round(time.time(), 3), "type": "poses",
+                                          "poses": self._object_poses()}) + "\n")
+
+    def apply_spawn_pose(self):
+        for adr, v in self.spawn_pose.items():
+            self.data.qpos[adr] = v
+        self.last_sideways = 0.0
+        if self.lateral_jitter > 0:
+            off = self.spawn_rng.uniform(-self.lateral_jitter, self.lateral_jitter)
+            self.last_sideways = float(off)
+            a = self.base_adr
+            self.data.qpos[a:a + 2] = self.model.qpos0[a:a + 2] + self.base_left * off
+            print(f"[sim] robot spawn {off*100:+.1f} cm sideways "
+                  f"({'left' if off > 0 else 'right'})", flush=True)
+        mujoco.mj_forward(self.model, self.data)
+
     def randomize_layout(self):
         """Give the table-top objects a fresh, reachable layout."""
+        if self.randomizer is not None and hasattr(self.randomizer, "park"):
+            self.randomizer.park(self.data)       # left-out fruits stay away
+            mujoco.mj_forward(self.model, self.data)
         if self.randomizer is None or not self.randomize_on_reset:
             return
         placed = self.randomizer.apply(self.data)
@@ -1551,10 +1674,12 @@ class MujocoWBCSim:
                     dup = (not auto and time.time() - self._last_visual_reset < 1.5)
                     print(f"[sim] reset: {cause}"
                           f"{' - same look kept' if auto or dup else ''}", flush=True)
+                    self.apply_spawn_pose()
                     self.randomize_layout()
                     if not (auto or dup):
                         self.new_visual_episode()
                         self._last_visual_reset = time.time()
+                    self.log_reset(cause)
                     wall_ref, sim_ref = time.time(), self.data.time
                 last_time = self.data.time
 
@@ -1602,6 +1727,7 @@ class MujocoWBCSim:
                 # Outside the `running` guard on purpose: paused or dragged in
                 # the viewer, the renderers should still follow.
                 self.publish_objects()
+                self.log_poses()
                 self.publish_state()
 
                 # --------------------------------------------
@@ -1709,6 +1835,14 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=None)
 
     parser.add_argument(
+        "--fruits",
+        default="",
+        help="Comma-separated fruits to spawn on the plate (e.g. mango,grapes); "
+             "the rest are parked off the table. Default: all. Plate+basket "
+             "scenes (layout_random.json) only.",
+    )
+
+    parser.add_argument(
         "--reach-min",
         type=float,
         default=0.18,
@@ -1811,6 +1945,7 @@ def main() -> int:
         visual_dr=args.visual_dr,
         visual_seed=args.visual_seed,
         control_port=args.control_port,
+        fruits=[f.strip() for f in args.fruits.split(",") if f.strip()],
     )
 
     sim.run()

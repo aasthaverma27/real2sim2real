@@ -7,8 +7,8 @@
   "output_background": "outputs/new_env/gravity_aligned_background.ply",
   "background_status": "missing",
   "point_selection": {
-    "vggt_dir": "/mnt/ssd2/robosnap/outputs/new_env/depth",
-    "plane_mask": "/mnt/ssd2/robosnap/outputs/new_env/support_mask.png",
+    "vggt_dir": "depth",
+    "plane_mask": "support_mask.png",
     "used_mask": true,
     "valid_points": 11345
   },
@@ -134,8 +134,8 @@
   "support_mesh_gravity": {
     "status": "ok",
     "object_id": 0,
-    "mesh": "/mnt/ssd2/robosnap/outputs/new_env/reconstruction/meshes/0_z_up.glb",
-    "pose": "/mnt/ssd2/robosnap/outputs/new_env/depth/object_point_clouds/0_pose_vggt_icp.txt",
+    "mesh": "reconstruction/meshes/0_z_up.glb",
+    "pose": "depth/object_point_clouds/0_pose_vggt_icp.txt",
     "selected_faces": 9841,
     "selected_area": 0.7127280374971182,
     "median_angular_residual_deg": 2.5753093347322196,

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import sys
 import time
 from pathlib import Path
@@ -182,6 +183,10 @@ def main() -> int:
                    help="keep the fixed table layout; by default every reset "
                         "(backspace in the viewer) reshuffles the objects.")
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--fruits", default="",
+                   help="plate+basket scenes: comma-separated fruits to put on "
+                        "the plate (e.g. mango,dragon_fruit); the rest are "
+                        "parked off the table. Default: all.")
     p.add_argument("--reach-min", type=float, default=0.36,
                    help="closest an object may spawn to the robot base, metres")
     p.add_argument("--reach-max", type=float, default=0.52)
@@ -199,6 +204,18 @@ def main() -> int:
     adr = spec.joint_addr(model, a.prefix)
     kp, kd = spec.gains()
     default = spec.default_pose()
+    # A scene can ask for a different resting elbow bend (spawn_pose.json
+    # "wbc_default_elbow"), the same override G1_DEFAULT_ELBOW gives the
+    # deployed controller: the stance, the arm targets and the balance net's
+    # reference pose all move with it.
+    spawn_cfg = Path(a.mjcf).resolve().parent.parent / "spawn_pose.json"
+    if spawn_cfg.exists():
+        elbow = json.loads(spawn_cfg.read_text()).get("wbc_default_elbow")
+        if elbow is not None:
+            for side in ("left", "right"):
+                i = next(k for k, n in enumerate(spec.body_joints) if n.startswith(f"{side}_elbow"))
+                default[i] = float(elbow)
+            print(f"[wbc] resting elbow {float(elbow):+.2f} rad (from {spawn_cfg.name})")
 
     def stand():
         """Put the robot in the controller's default stance, feet on the floor."""
@@ -235,8 +252,19 @@ def main() -> int:
     # and puts the objects back in one fixed layout.  Reshuffle them instead so
     # every episode starts somewhere new - within the robot's half of the table
     # and within arm's reach, or teleoperation gets awkward.
-    rand = None
-    if a.randomize:
+    rand = parker = None
+    # Plate + fruits + basket scenes carry their own layout config next to the
+    # scene's mujoco/ directory; everything else uses the apple/basket annulus.
+    layout_cfg = Path(a.mjcf).resolve().parent.parent / "layout_random.json"
+    if layout_cfg.exists():
+        from randomize_plate_basket import PlateBasketRandomizer
+        cfg = json.loads(layout_cfg.read_text())
+        fruits = [f.strip() for f in a.fruits.split(",") if f.strip()]
+        if fruits:
+            cfg["only_fruits"] = fruits
+        parker = PlateBasketRandomizer(model, data, cfg, seed=a.seed)
+        rand = parker if a.randomize else None
+    elif a.randomize:
         from randomize_objects import TableRandomizer
         try:
             rand = TableRandomizer(model, data, seed=a.seed,
@@ -246,6 +274,9 @@ def main() -> int:
 
     def reset_layout():
         stand()
+        if parker is not None:
+            parker.park(data)        # left-out fruits stay off the table
+            mujoco.mj_forward(model, data)
         if rand is not None:
             placed = rand.apply(data)
             mujoco.mj_forward(model, data)
@@ -257,6 +288,7 @@ def main() -> int:
     print(f"[wbc] {spec.name}: stance set, base z={data.qpos[adr['base_q'] + 2]:+.3f}")
 
     wbc = Wbc(spec)
+    wbc.default = default.copy()
     groot = None
     if a.policy_host:
         groot = Groot(a.policy_host, a.policy_port, a.lang)

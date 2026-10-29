@@ -1,0 +1,10 @@
+{
+ "at": [
+  0.016,
+  0.425
+ ],
+ "yaw": 1.5429,
+ "floor_z": 0.0,
+ "scene_xml": "mujoco/scene_g1.xml",
+ "robot": "g1_29dof_with_hand"
+}

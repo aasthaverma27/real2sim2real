@@ -1,0 +1,36 @@
+{
+ "table": "obj0_white_table",
+ "plate": "obj3_plate",
+ "basket": "obj2_brown_basket",
+ "fruits": [
+  "obj4_mango",
+  "obj5_grapes",
+  "obj6_dragon_fruit",
+  "obj7_blue_octopus",
+  "obj8_pink_octopus",
+  "obj9_unicorn",
+  "obj10_apple",
+  "obj11_kiwi"
+ ],
+ "swap_prob": 1.0,
+ "swap_mode": "mirror",
+ "jitter_along_m": 0.04,
+ "jitter_depth_m": 0.04,
+ "basket_yaw_deg": 15,
+ "plate_rim_m": 0.015,
+ "min_gap_m": 0.01,
+ "robot_clearance_m": 0.01,
+ "side_items": {
+  "unicorn": {
+   "fwd": [
+    0.38,
+    0.52
+   ],
+   "left": [
+    -0.3,
+    -0.06
+   ],
+   "clearance_m": 0.04
+  }
+ }
+}

@@ -1,0 +1,21 @@
+{
+ "_comment": "Arm pose the WBC holds at rest when started with G1_DEFAULT_ELBOW=wbc_default_elbow (start.sh prints the command with it), read from rt/lowstate after a reset - so a reset lands the arms exactly where the controller keeps them. The elbow settles at -0.42, not -0.5, because the arm sags under gravity.",
+ "wbc_default_elbow": -0.5,
+ "joints": {
+  "left_shoulder_pitch_joint": 0.0311,
+  "left_shoulder_roll_joint": 0.1913,
+  "left_shoulder_yaw_joint": -0.0163,
+  "left_elbow_joint": -0.4187,
+  "left_wrist_roll_joint": 0.0014,
+  "left_wrist_pitch_joint": 0.0576,
+  "left_wrist_yaw_joint": -0.0074,
+  "right_shoulder_pitch_joint": 0.0309,
+  "right_shoulder_roll_joint": -0.1908,
+  "right_shoulder_yaw_joint": 0.0176,
+  "right_elbow_joint": -0.419,
+  "right_wrist_roll_joint": -0.0014,
+  "right_wrist_pitch_joint": 0.0574,
+  "right_wrist_yaw_joint": 0.008
+ },
+ "lateral_jitter_m": 0.03
+}

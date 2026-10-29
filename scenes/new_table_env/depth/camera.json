@@ -1,0 +1,84 @@
+{
+  "input_image": "image.png",
+  "original_size_wh": [
+    1080,
+    1920
+  ],
+  "preprocessed_size_hw": [
+    518,
+    518
+  ],
+  "preprocess_mode": "pad",
+  "preprocess_transform_original_to_preprocessed": {
+    "scale_x": 0.2722222222222222,
+    "scale_y": 0.26979166666666665,
+    "offset_x": 112.0,
+    "offset_y": 0.0,
+    "resized_width": 294,
+    "resized_height": 518
+  },
+  "model": "facebook/VGGT-1B",
+  "checkpoint": null,
+  "exported_points": 38073,
+  "include_padding": false,
+  "conf_threshold": null,
+  "stride": 2,
+  "coordinate_convention": "OpenCV: x right, y down, z forward",
+  "extrinsic_convention": "camera-from-world [R|t], shape 3x4",
+  "intrinsic_preprocessed_convention": "pixel intrinsics for image_preprocessed.png",
+  "intrinsic_original_pixels_convention": "same VGGT camera converted back to original image pixel coordinates",
+  "intrinsic_preprocessed": [
+    [
+      494.23394775390625,
+      0.0,
+      259.0
+    ],
+    [
+      0.0,
+      493.4747619628906,
+      259.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "intrinsic_original_pixels": [
+    [
+      1815.55322265625,
+      0.0,
+      540.0
+    ],
+    [
+      0.0,
+      1829.095703125,
+      960.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "extrinsic": [
+    [
+      1.0,
+      -0.0001040191637002863,
+      -1.924271600728389e-05,
+      -2.4600376491434872e-06
+    ],
+    [
+      0.00010401890176581219,
+      1.0,
+      -1.3453557585307863e-05,
+      -4.202408945275238e-06
+    ],
+    [
+      1.924411662912462e-05,
+      1.345155578746926e-05,
+      1.0,
+      0.00013525481335818768
+    ]
+  ]
+}

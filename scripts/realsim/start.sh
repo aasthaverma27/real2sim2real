@@ -17,6 +17,13 @@
 #                                         background look on every reset
 #                                         (backspace); ranges in
 #                                         configs/visual_randomization.yaml
+#   scripts/realsim/start.sh --mango --dragon-fruit   plate+basket scenes
+#                                         (scenes/new_table_env): put these
+#                                         fruits on the plate. Also --grapes,
+#                                         --apple, --kiwi, --blue-octopus,
+#                                         --pink-octopus, --unicorn, or
+#                                         --fruits mango,grapes. No fruit flag =
+#                                         an empty plate.
 #   scripts/realsim/start.sh --stop       close everything
 #   scripts/realsim/start.sh --scene outputs/myroom --robot g1_cad
 #
@@ -68,6 +75,7 @@ PAUSED=0
 RELAY=0
 VISUAL_DR=0
 VISUAL_CFG=
+FRUITS=
 LOGS=/tmp/realsim
 CEIL="${RS_VRAM_CEILING_MIB:-31000}"
 
@@ -114,6 +122,9 @@ while [ $# -gt 0 ]; do
     --vla-ego) VLA_EGO="$2"; shift 2 ;;
     --hold)    HOLD=1; shift ;;
     --paused)  PAUSED=1; shift ;;
+    --mango|--grapes|--dragon-fruit|--apple|--kiwi|--blue-octopus|--pink-octopus|--unicorn)
+      f="${1#--}"; FRUITS="${FRUITS:+$FRUITS,}${f//-/_}"; shift ;;
+    --fruits)     FRUITS="${FRUITS:+$FRUITS,}$2"; shift 2 ;;
     --visual-dr)
       VISUAL_DR=1; shift
       # optional config path right after the flag
@@ -132,7 +143,7 @@ if [ -z "$SCENE" ]; then
       echo; echo "Scenes you have:"
       for d in outputs/*/mujoco; do echo "    --scene $(dirname "$d")"; done
     else
-      echo; echo "You have not built a scene yet - see README, section 3."
+      echo; echo "No scene built yet: use scenes/new_env or scenes/new_table_env, or build one (README: 'Building a scene from your own room')."
     fi
   } >&2
   exit 2
@@ -174,6 +185,28 @@ EXCLUDE=""
 if [ -f "$VIEW_JSON" ]; then
   EXCLUDE=$("$SIM" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("exclude_geoms",""))' "$VIEW_JSON")
 fi
+# Plate+basket scenes: fruits left out are parked by the sim and must not be
+# drawn either. Their body names come from the scene's layout_random.json.
+if [ -f "$SCENE/layout_random.json" ]; then
+  if [ -z "$FRUITS" ]; then
+    FRUITS=none
+    echo "[start] empty plate - add fruits with e.g. --mango --dragon-fruit"
+  fi
+  if [ -n "$FRUITS" ]; then
+    HIDE=$("$SIM" -c 'import json,sys
+want=[w for w in sys.argv[2].split(",") if w]
+fr=json.load(open(sys.argv[1]))["fruits"]
+if want == ["none"]: print(",".join(fr)); sys.exit()
+bad=[w for w in want if not any(w in f for f in fr)]
+if bad: sys.exit("unknown fruit(s): %s; this scene has %s" % (bad, fr))
+print(",".join(f for f in fr if not any(w in f for w in want)))' "$SCENE/layout_random.json" "$FRUITS") || exit 2
+    echo "[start] fruits: $FRUITS${HIDE:+ (left out: $HIDE)}"
+    [ -n "$HIDE" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$HIDE"
+  fi
+elif [ -n "$FRUITS" ]; then
+  echo "fruit flags need a plate+basket scene (with layout_random.json), e.g. scenes/new_table_env" >&2
+  exit 2
+fi
 EXARGS=(); [ -n "$EXCLUDE" ] && { EXARGS=(--exclude-geoms "$EXCLUDE"); echo "[start] not drawing: $EXCLUDE (the splat shows them)"; }
 
 [ -n "$FOVY" ] && FOVYARGS=(--fovy "$FOVY")
@@ -185,7 +218,7 @@ PLY=$(ls -t "$SCENE"/gs_bg_notripod.ply "$SCENE"/gs_bg_clean.ply "$SCENE"/gs_bg.
 if [ ! -f "$RENDER_MJCF" ]; then
   {
     echo "No scene at $SCENE (expected $SCENE/mujoco/scene_g1.xml)."
-    echo "Build it with scripts/build_sim_scene.sh - README, section 3."
+    echo "Build it with scripts/build_sim_scene.sh (README: 'Building a scene from your own room')."
     echo "Check the whole setup with:  scripts/doctor.sh"
   } >&2
   exit 1
@@ -261,6 +294,7 @@ wait_for() {   # wait_for <log> <pattern> <label>
 LAYOUTARGS=()
 [ "$RANDOMIZE" = 0 ] && LAYOUTARGS+=(--no-randomize)
 [ -n "$LAYOUT_SEED" ] && LAYOUTARGS+=(--seed "$LAYOUT_SEED")
+[ -n "$FRUITS" ] && LAYOUTARGS+=(--fruits "$FRUITS")
 
 if [ "$BUILTIN" = 1 ]; then
   # Bundled controller, in-process: it owns the physics and broadcasts its own
@@ -305,6 +339,7 @@ else
   [ "$RANDOMIZE" = 0 ] && SIMPUB+=(--no-randomize)
   [ -n "$LAYOUT_SEED" ] && SIMPUB+=(--seed "$LAYOUT_SEED")
   [ "$RELAY" = 0 ] && SIMPUB+=(--publish-state "$MIRROR_PORTS")
+  [ -n "$FRUITS" ] && SIMPUB+=(--fruits "$FRUITS")
   PYTHONPATH="$RS_DEPLOY_ROOT" MUJOCO_GL=glfw \
   setsid nohup "$VENVSIM" scripts/run_mujoco_wbc_sim.py \
       --scene-dir "$SCENE" --mjcf "$WBC_MJCF" "${HOLDFLAG[@]}" \
@@ -379,13 +414,21 @@ fi
 
 echo
 echo "[start] windows are up on $DISPLAY. Logs under $LOGS/"
+# A scene can ask the controller for a different resting arm pose (its
+# spawn_pose.json "wbc_default_elbow"), so the hands clear its objects. The sim
+# spawns in that pose; the controller must hold the same one or the arms jump.
+WBC_ENV=""
+if [ -f "$SCENE/spawn_pose.json" ]; then
+  ELBOW=$("$SIM" -c 'import json,sys; v=json.load(open(sys.argv[1])).get("wbc_default_elbow"); print("" if v is None else v)' "$SCENE/spawn_pose.json")
+  [ -n "$ELBOW" ] && WBC_ENV="-e G1_DEFAULT_ELBOW=$ELBOW "
+fi
 if [ "$BUILTIN" = 0 ]; then
 cat <<EOF
 
 The sim is WAITING FOR WBC and the robot is falling. Start your controller:
 
   docker exec -it -w /root/Projects/GR00T-WholeBodyControl \\
-      -e PYTHONPATH=/root/Projects/GR00T-WholeBodyControl decoupled_wbc-bash-root bash -c '
+      -e PYTHONPATH=/root/Projects/GR00T-WholeBodyControl ${WBC_ENV}decoupled_wbc-bash-root bash -c '
     source /root/venv/bin/activate; source /opt/ros/humble/setup.bash
     python decoupled_wbc/control/main/teleop/run_g1_control_loop.py \\
       --wbc_version gear_wbc \\
@@ -404,7 +447,9 @@ Three things in that command are load-bearing:
   PYTHONPATH=...   makes the MOUNTED checkout (with our patch: DOMAIN_ID 99,
                    the VLA camera client) win over the copy baked into the
                    image, whose config says DOMAIN_ID: 0 - the real robot. Our
-                   sim is on 99, so it would connect to nothing, silently.
+                   sim is on 99, so it would connect to nothing, silently.${WBC_ENV:+
+  G1_DEFAULT_ELBOW this scene's resting arm pose (spawn_pose.json); without it
+                   the controller pulls the arms down onto the objects}
 
 (container not up:  cd $RS_DEPLOY_ROOT && ./decoupled_wbc/docker/run_docker.sh --root
  - it opens a shell in the container; run the command above from another terminal)

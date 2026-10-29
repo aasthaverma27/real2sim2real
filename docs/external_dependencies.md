@@ -48,6 +48,8 @@ with NVIDIA's own `install_scripts/install_mujoco_sim.sh`.
 | DDS domain 99 | `g1_29dof_gear_wbc.yaml` | the sim's domain; the real robot is on 0 |
 | three-camera defaults | `configs.py` | head + two wrists; the stereo pair is not published |
 | camera probe (new) | `decoupled_wbc/scripts/zmq_probe.py` | checks the camera server before recording |
+| resting elbow override | `g1_supplemental_info.py` | `G1_DEFAULT_ELBOW` (rad), read only when set, bends both elbows in the default pose so the resting hands clear tall objects (`scenes/new_table_env`); `start.sh` sets it from the scene's `spawn_pose.json` |
+| π0.5 policy loop (new) | `decoupled_wbc/control/main/pi05/` | runs an openpi policy server's actions through the WBC on the real robot or in the sim; see [finetune_pi05.md](finetune_pi05.md) |
 
 To move to a newer upstream commit, change the pin in
 `scripts/setup_external.sh` and `scripts/register_submodules.sh`, check that

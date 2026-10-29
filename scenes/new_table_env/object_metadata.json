@@ -1,0 +1,31 @@
+{
+  "objects": [
+    {
+      "id": 0,
+      "name": "the round wooden table",
+      "prompt": "the round wooden table",
+      "geometry_prompts": [],
+      "source_id": 0,
+      "support_parent_id": -1,
+      "support_relation": "none"
+    },
+    {
+      "id": 1,
+      "name": "the red apple",
+      "prompt": "the red apple",
+      "geometry_prompts": [],
+      "source_id": 1,
+      "support_parent_id": -1,
+      "support_relation": "none"
+    },
+    {
+      "id": 2,
+      "name": "the woven brown basket",
+      "prompt": "the woven brown basket",
+      "geometry_prompts": [],
+      "source_id": 2,
+      "support_parent_id": -1,
+      "support_relation": "none"
+    }
+  ]
+}

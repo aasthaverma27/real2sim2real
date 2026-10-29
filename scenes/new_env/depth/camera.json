@@ -1,5 +1,5 @@
 {
-  "input_image": "/mnt/ssd2/robosnap/outputs/new_env/image.png",
+  "input_image": "image.png",
   "original_size_wh": [
     1080,
     1920

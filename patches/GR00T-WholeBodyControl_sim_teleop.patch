@@ -1,3 +1,1652 @@
+diff --git a/decoupled_wbc/control/main/pi05/__init__.py b/decoupled_wbc/control/main/pi05/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/decoupled_wbc/control/main/pi05/camera_client.py b/decoupled_wbc/control/main/pi05/camera_client.py
+new file mode 100644
+index 0000000..e3e3fa7
+--- /dev/null
++++ b/decoupled_wbc/control/main/pi05/camera_client.py
+@@ -0,0 +1,192 @@
++#!/usr/bin/env python3
++"""Standalone robot camera viewer.
++
++Connects to a robot_camera_server ZMQ PUB socket, shows each camera's stream
++in its own window, and prints per-camera receive FPS to the terminal so you
++can track how fast frames are actually arriving.
++
++Only needs: pyzmq, opencv-python, numpy
++    pip install pyzmq opencv-python numpy
++
++Usage:
++    python3 camera_client.py --host <robot-ip> --port 5555
++    python3 camera_client.py --host localhost --port 5555 --topics ego_view ego_left
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import threading
++import time
++
++import cv2
++import numpy as np
++import zmq
++
++
++def parse_args():
++    parser = argparse.ArgumentParser(description="Robot camera ZMQ viewer")
++    parser.add_argument("--host", default="localhost", help="Camera server host")
++    parser.add_argument("--port", type=int, default=5555, help="Camera server ZMQ port")
++    parser.add_argument(
++        "--topics", nargs="*", default=None,
++        help="Camera names to subscribe to (default: all cameras published by the server)",
++    )
++    parser.add_argument(
++        "--fps-interval", type=float, default=1.0,
++        help="Seconds between FPS reports per camera (default: 1.0)",
++    )
++    parser.add_argument(
++        "--no-display", action="store_true",
++        help="Only print FPS stats, don't open image windows",
++    )
++    return parser.parse_args()
++
++
++class FpsTracker:
++    def __init__(self, report_interval: float):
++        self.report_interval = report_interval
++        self.count = 0
++        self.window_start = time.time()
++        self.fps = 0.0
++
++    def tick(self) -> float | None:
++        """Register one received frame. Returns the FPS value if it just refreshed."""
++        self.count += 1
++        now = time.time()
++        elapsed = now - self.window_start
++        if elapsed >= self.report_interval:
++            self.fps = self.count / elapsed
++            self.count = 0
++            self.window_start = now
++            return self.fps
++        return None
++
++
++# The real robot's camera server publishes ego_view / ego_left / ego_right; the
++# real2sim2real camera server (scripts/realsim/vla_camera_server.py) publishes
++# the same frames as stereo/right / hand_left / hand_right. Both names are
++# subscribed and stored under the robot's, so one client works against either.
++TOPIC_ALIASES = {"stereo/right": "ego_view", "hand_left": "ego_left", "hand_right": "ego_right"}
++
++
++class CameraClient:
++    """Background ZMQ SUB client keeping only the newest frame per camera.
++
++    Drop-in for VLAImageClient: ``read()`` returns ``{"images": {name: RGB HxWx3
++    uint8}, "timestamps": {name: float}}`` once every camera in ``topics`` has
++    delivered a frame, else None. Frames are decoded lazily in read().
++    """
++
++    def __init__(self, host: str, port: int, topics: list[str]):
++        self.topics = list(topics)
++        self._ctx = zmq.Context()
++        self._sock = self._ctx.socket(zmq.SUB)
++        self._sock.setsockopt(zmq.RCVHWM, 10)
++        self._sock.setsockopt(zmq.RCVTIMEO, 200)
++        self._sock.connect(f"tcp://{host}:{port}")
++        for t in self.topics:
++            self._sock.setsockopt_string(zmq.SUBSCRIBE, t)
++        for alias, name in TOPIC_ALIASES.items():
++            if name in self.topics:
++                self._sock.setsockopt_string(zmq.SUBSCRIBE, alias)
++        self._latest: dict[str, tuple[bytes, float]] = {}
++        self._lock = threading.Lock()
++        self._running = True
++        self._thread = threading.Thread(target=self._recv_loop, daemon=True)
++        self._thread.start()
++
++    def _recv_loop(self):
++        while self._running:
++            try:
++                topic, header_bytes, payload = self._sock.recv_multipart()
++            except zmq.Again:
++                continue
++            except zmq.ZMQError:
++                break
++            header = json.loads(header_bytes.decode("utf-8"))
++            with self._lock:
++                name = topic.decode("utf-8")
++                self._latest[TOPIC_ALIASES.get(name, name)] = (payload, header.get("timestamp", 0.0))
++
++    def missing_topics(self) -> list[str]:
++        """Topics in ``self.topics`` that have not delivered a frame yet."""
++        with self._lock:
++            return [t for t in self.topics if t not in self._latest]
++
++    def read(self):
++        with self._lock:
++            if any(t not in self._latest for t in self.topics):
++                return None
++            snap = dict(self._latest)
++        images, stamps = {}, {}
++        for t in self.topics:
++            payload, ts = snap[t]
++            bgr = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
++            if bgr is None:
++                return None
++            images[t] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
++            stamps[t] = ts
++        return {"images": images, "timestamps": stamps}
++
++    def close(self):
++        self._running = False
++        self._thread.join(timeout=1.0)
++        self._sock.close(linger=0)
++        self._ctx.term()
++
++
++def main():
++    args = parse_args()
++
++    context = zmq.Context.instance()
++    socket = context.socket(zmq.SUB)
++    socket.setsockopt(zmq.RCVHWM, 10)
++    addr = f"tcp://{args.host}:{args.port}"
++    socket.connect(addr)
++
++    if args.topics:
++        for topic in args.topics:
++            socket.setsockopt_string(zmq.SUBSCRIBE, topic)
++    else:
++        socket.setsockopt_string(zmq.SUBSCRIBE, "")  # all topics
++
++    print(f"Connected to {addr}")
++    print(f"Subscribed to: {', '.join(args.topics) if args.topics else 'ALL cameras'}")
++    print("Press 'q' in an image window, or Ctrl+C here, to quit.\n")
++
++    trackers: dict[str, FpsTracker] = {}
++
++    try:
++        while True:
++            topic, header_bytes, payload = socket.recv_multipart()
++            name = topic.decode("utf-8")
++            header = json.loads(header_bytes.decode("utf-8"))
++
++            tracker = trackers.setdefault(name, FpsTracker(args.fps_interval))
++            fps = tracker.tick()
++            if fps is not None:
++                latency_ms = (time.time() - header["timestamp"]) * 1000
++                print(f"[{name}] recv_fps={fps:5.1f}  latency={latency_ms:6.1f}ms  seq={header['seq']}")
++
++            if not args.no_display:
++                frame = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
++                if frame is not None:
++                    cv2.putText(
++                        frame, f"{name}  {tracker.fps:.1f} fps", (10, 24),
++                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
++                    )
++                    cv2.imshow(name, frame)
++                    if cv2.waitKey(1) & 0xFF == ord("q"):
++                        break
++    except KeyboardInterrupt:
++        pass
++    finally:
++        cv2.destroyAllWindows()
++        socket.close(linger=0)
++        context.term()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/decoupled_wbc/control/main/pi05/observation.py b/decoupled_wbc/control/main/pi05/observation.py
+new file mode 100644
+index 0000000..84167b9
+--- /dev/null
++++ b/decoupled_wbc/control/main/pi05/observation.py
+@@ -0,0 +1,355 @@
++"""
++Modular ROS Observation Reader for GR00T Policy
++Reads joint states and images from ROS topics and formats them for policy input.
++"""
++
++import threading
++import time
++from typing import Dict, Any, Optional
++import numpy as np
++import rclpy
++
++from decoupled_wbc.control.main.pi05.camera_client import CameraClient
++from decoupled_wbc.control.utils.ros_utils import ROSMsgSubscriber
++
++
++class ROSObservationReader:
++    """
++    Reads robot state and images from ROS topics and provides them
++    in the format expected by GR00T policy.
++    """
++    
++    def __init__(
++        self,
++        camera_host: str,
++        camera_port: int,
++        state_topic_name: str,
++        frequency: int = 20,
++        add_stereo_camera: bool = True,
++        auto_start: bool = True,
++        image_client=None,
++        camera_topics=("ego_view", "ego_left", "ego_right"),
++    ):
++        """
++        Args:
++            camera_host: IP address of camera server
++            camera_port: Port of camera server
++            state_topic_name: ROS topic name for robot state
++            frequency: Polling frequency in Hz
++            add_stereo_camera: Whether to include stereo cameras
++            auto_start: If True, automatically start the reading thread
++            image_client: Optional object with read()/close() returning
++                {"images": {...}}; replaces the default clinet.CameraClient
++            camera_topics: Camera topics for the default CameraClient
++                (ego_view first; wrist cams are dropped if add_stereo_camera=False)
++        """
++        self.frequency = frequency
++        self.add_stereo_camera = add_stereo_camera
++        
++        # Initialize ROS
++        rclpy.init(args=None)
++        self.node = rclpy.create_node("observation_reader")
++        
++        # Start ROS spinning in a separate thread
++        self._ros_thread = threading.Thread(
++            target=rclpy.spin, 
++            args=(self.node,), 
++            daemon=True
++        )
++        self._ros_thread.start()
++        time.sleep(0.5)  # Give ROS time to initialize
++        
++        # Initialize subscribers
++        self._state_subscriber = ROSMsgSubscriber(state_topic_name)
++
++        # clinet.CameraClient runs its own background ZMQ receive thread that keeps only
++        # the newest JPEG per camera and decodes lazily in read(), so every read() returns
++        # the freshest available frame (no stale backlog, no separate ROS spin needed).
++        if image_client is not None:
++            self._image_subscriber = image_client
++        else:
++            # read() returns None until every topic has a frame, so drop the wrist
++            # cameras when they aren't used.
++            topics = list(camera_topics) if self.add_stereo_camera else list(camera_topics)[:1]
++            self._image_subscriber = CameraClient(camera_host, camera_port, topics)
++        
++        # Create rate limiter
++        self.rate = self.node.create_rate(self.frequency)
++        
++        # Latest messages
++        self._latest_image_msg = None
++        self._latest_state_msg = None
++        self._lock = threading.Lock()
++        
++        # Thread control
++        self._running = False
++        self._read_thread = None
++        
++        if auto_start:
++            self.start()
++    
++    def start(self):
++        """Start the observation reading thread."""
++        if self._running:
++            print("Reader already running!")
++            return
++        
++        self._running = True
++        self._read_thread = threading.Thread(target=self._read_loop, daemon=True)
++        self._read_thread.start()
++        print(f"✓ Observation reader started at {self.frequency} Hz")
++    
++    def stop(self):
++        """Stop the observation reading thread."""
++        self._running = False
++        if self._read_thread is not None:
++            self._read_thread.join(timeout=2.0)
++        print("✓ Observation reader stopped")
++    
++    def _read_loop(self):
++        """Internal loop that continuously reads from ROS topics."""
++        try:
++            while rclpy.ok() and self._running:
++                # Read joint state
++                state_msg = self._state_subscriber.get_msg()
++                if state_msg is not None:
++                    with self._lock:
++                        self._latest_state_msg = state_msg
++                
++                # Read images
++                image_msg = self._image_subscriber.read()
++                if image_msg is not None:
++                    with self._lock:
++                        self._latest_image_msg = image_msg
++                
++                # Sleep at specified rate
++                self.rate.sleep()
++                
++        except Exception as e:
++            print(f"Error in read loop: {e}")
++            import traceback
++            traceback.print_exc()
++    
++    def get_latest_messages(self) -> tuple:
++        """
++        Get the latest state and image messages.
++        
++        Returns:
++            (state_msg, image_msg) tuple or (None, None) if not available
++        """
++        with self._lock:
++            return self._latest_state_msg, self._latest_image_msg
++    
++    def get_observation(self, lang_instruction: str = "") -> Optional[Dict[str, Any]]:
++        """
++        Get observation dict formatted for GR00T policy.
++        
++        Args:
++            lang_instruction: Language instruction for the task
++            
++        Returns:
++            Observation dict the policy loop sends to the server
++            or None if messages are not yet available
++        """
++        state_msg, image_msg = self.get_latest_messages()
++        
++        if state_msg is None or image_msg is None:
++            return None
++        
++        obs = {}
++        
++        # ========== CAMERAS ==========
++        images = image_msg["images"]
++        
++        # CameraClient returns images keyed by topic: ego_view (main ego view),
++        # ego_left (left wrist), ego_right (right wrist). Map them onto the obs keys
++        # the GR00T policy consumes.
++        if "ego_view" in images:
++            obs["ego_view"] = images["ego_view"]
++
++        if self.add_stereo_camera:
++            # Left stereo / left-wrist camera
++            if "ego_left" in images:
++                obs["ego_view_left_mono"] = images["ego_left"]
++
++            # Right stereo / right-wrist camera
++            if "ego_right" in images:
++                obs["ego_view_right_mono"] = images["ego_right"]
++        
++        # ========== JOINT POSITIONS ==========
++        # Extract joint positions from state message
++        # Assuming state_msg["q"] contains all 43 joints in order:
++        # left_leg (6), right_leg (6), waist (3), left_arm (7), left_hand (7), 
++        # right_arm (7), right_hand (7)
++        
++        q = state_msg["q"]
++        
++        # Split joints into groups based on indices
++        obs["left_leg.pos"] = q[0:6].astype(np.float32)
++        obs["right_leg.pos"] = q[6:12].astype(np.float32)
++        obs["waist.pos"] = q[12:15].astype(np.float32)
++        obs["left_arm.pos"] = q[15:22].astype(np.float32)
++        obs["left_hand.pos"] = q[22:29].astype(np.float32)
++        obs["right_arm.pos"] = q[29:36].astype(np.float32)
++        obs["right_hand.pos"] = q[36:43].astype(np.float32)
++        
++        # ========== WRIST POSES ==========
++        # Extract wrist poses from state message
++        # wrist_pose format: [left_pos(3), left_quat(4), right_pos(3), right_quat(4)]
++        wrist_pose = state_msg["wrist_pose"]
++        
++        obs["left_wrist_pos"] = wrist_pose[0:3].astype(np.float32)
++        obs["left_wrist_abs_quat"] = wrist_pose[3:7].astype(np.float32)
++        obs["right_wrist_pos"] = wrist_pose[7:10].astype(np.float32)
++        obs["right_wrist_abs_quat"] = wrist_pose[10:14].astype(np.float32)
++        
++        # ========== NAVIGATION COMMANDS ==========
++        obs["base_height_command"] = np.array(
++            [0.74], 
++            dtype=np.float32
++        )
++        obs["navigate_command"] = np.array(
++            [0.0, 0.0, 0.0], 
++            dtype=np.float32
++        )
++        
++        # ========== LANGUAGE INSTRUCTION ==========
++        obs["lang"] = lang_instruction
++        
++        return obs
++    
++    def is_ready(self) -> bool:
++        """Check if observations are available."""
++        state_msg, image_msg = self.get_latest_messages()
++        return state_msg is not None and image_msg is not None
++    
++    def wait_until_ready(self, timeout: float = 10.0) -> bool:
++        """
++        Wait until observations are available.
++        
++        Args:
++            timeout: Maximum time to wait in seconds
++            
++        Returns:
++            True if ready, False if timeout
++        """
++        start_time = time.time()
++        while not self.is_ready():
++            if time.time() - start_time > timeout:
++                print(f"⚠ Timeout waiting for observations")
++                return False
++            time.sleep(0.1)
++        return True
++    
++    def shutdown(self):
++        """Cleanup and shutdown."""
++        self.stop()
++        self._image_subscriber.close()  # stop the ZMQ receive thread + close socket
++        self.node.destroy_node()
++        rclpy.shutdown()
++        print("✓ Reader shutdown complete")
++    
++    def __enter__(self):
++        """Context manager entry."""
++        return self
++    
++    def __exit__(self, exc_type, exc_val, exc_tb):
++        """Context manager exit."""
++        self.shutdown()
++
++
++# Convenience function for quick usage
++def create_observation_reader(
++    camera_host: str = "localhost",
++    camera_port: int = 5555,
++    state_topic_name: str = "/robot_state",
++    frequency: int = 20,
++    add_stereo_camera: bool = True,
++    image_client=None,
++    camera_topics=("ego_view", "ego_left", "ego_right"),
++) -> ROSObservationReader:
++    """
++    Create and return an observation reader.
++    
++    Example:
++        reader = create_observation_reader()
++        reader.wait_until_ready()
++        obs = reader.get_observation("pick up the cube")
++    """
++    return ROSObservationReader(
++        camera_host=camera_host,
++        camera_port=camera_port,
++        state_topic_name=state_topic_name,
++        frequency=frequency,
++        add_stereo_camera=add_stereo_camera,
++        image_client=image_client,
++        camera_topics=camera_topics,
++    )
++
++
++# Example usage
++if __name__ == "__main__":
++    from decoupled_wbc.control.main.constants import STATE_TOPIC_NAME
++    
++    print("=" * 80)
++    print("ROS OBSERVATION READER TEST")
++    print("=" * 80)
++    
++    # Create reader
++    reader = create_observation_reader(
++        camera_host="localhost",
++        camera_port=5555,
++        state_topic_name=STATE_TOPIC_NAME,
++        frequency=20,
++        add_stereo_camera=True,
++    )
++    
++    try:
++        # Wait for data
++        print("\nWaiting for observations...")
++        if reader.wait_until_ready(timeout=10.0):
++            print("✓ Observations ready!\n")
++            
++            # Get observation
++            obs = reader.get_observation("pick up the red cube")
++            
++            if obs is not None:
++                print("Observation keys:", list(obs.keys()))
++                print("\nCamera shapes:")
++                for key in ["ego_view", "ego_view_left_mono", "ego_view_right_mono"]:
++                    if key in obs:
++                        print(f"  {key}: {obs[key].shape}")
++                
++                print("\nJoint group shapes:")
++                for group in ["left_leg", "right_leg", "waist", "left_arm", 
++                             "left_hand", "right_arm", "right_hand"]:
++                    key = f"{group}.pos"
++                    if key in obs:
++                        print(f"  {key}: {obs[key].shape}")
++                
++                print("\nWrist poses:")
++                for key in ["left_wrist_pos", "left_wrist_abs_quat", 
++                           "right_wrist_pos", "right_wrist_abs_quat"]:
++                    if key in obs:
++                        print(f"  {key}: {obs[key]}")
++                
++                print(f"\nLanguage: {obs['lang']}")
++                print("\n✓ Observation successfully retrieved!")
++            else:
++                print("✗ Failed to get observation")
++        else:
++            print("✗ Timeout waiting for observations")
++        
++        # Keep reading for a few seconds
++        print("\nReading observations for 5 seconds...")
++        for i in range(5):
++            time.sleep(1)
++            obs = reader.get_observation(f"test instruction {i}")
++            if obs:
++                print(f"  [{i+1}/5] Got observation with {len(obs)} keys")
++        
++    except KeyboardInterrupt:
++        print("\nInterrupted by user")
++    finally:
++        reader.shutdown()
++        print("\n" + "=" * 80)
+\ No newline at end of file
+diff --git a/decoupled_wbc/control/main/pi05/run_pi05_policy.py b/decoupled_wbc/control/main/pi05/run_pi05_policy.py
+new file mode 100644
+index 0000000..8f18143
+--- /dev/null
++++ b/decoupled_wbc/control/main/pi05/run_pi05_policy.py
+@@ -0,0 +1,1080 @@
++#!/usr/bin/env python3
++"""Run a pi0.5 (openpi) policy on the G1 through the whole-body controller.
++
++The same loop drives the real robot and the real2sim2real simulation: both
++publish the robot state on ROS and stream the three cameras over ZMQ, and the
++policy's 28 upper-body targets go to the WBC on CONTROL_GOAL_TOPIC.
++
++Start a policy server first (real2sim2real: scripts/pi05/serve_pi05.py), then,
++inside the WBC container:
++
++    python decoupled_wbc/control/main/pi05/run_pi05_policy.py --probe   # one chunk, nothing published
++    python decoupled_wbc/control/main/pi05/run_pi05_policy.py \
++        --prompt "pick up the mango and place it in the basket"
++
++Sent to the policy server
++-------------------------
++The three camera views, the 28-D upper-body joint state and the prompt::
++
++    observation/state       (28,)   float32
++    observation/ego_view    (H,W,3) uint8
++    observation/ego_left    (H,W,3) uint8
++    observation/ego_right   (H,W,3) uint8
++    prompt                  str
++
++Legs, waist, wrist poses, base height and navigation are not sent.
++``base_height_command`` and ``navigate_cmd`` are pinned to the teleop
++constants (DEFAULT_BASE_HEIGHT, DEFAULT_NAV_CMD), never taken from the policy.
++
++28-D layout (state and action)::
++
++    [ 0: 7]  left_arm      [ 7:14]  left_hand
++    [14:21]  right_arm     [21:28]  right_hand
++
++Action space
++------------
++The released checkpoints are trained with ``make_bool_mask(7, -7, 7, -7)``:
++arms as deltas from the current state, hands absolute. ``serve_pi05.py``
++serves the arm deltas as-is by default, so this client adds the state to the
++arms once (``--arm-action-mode delta``, the default here). A server that keeps
++openpi's AbsoluteActions needs ``--arm-action-mode absolute``. Never both: the
++state would be added twice.
++
++Run with ``--probe`` first: it prints one chunk next to the measured state
++under both interpretations and exits without touching the robot.
++"""
++
++import csv
++import json
++import os
++import queue
++import re
++import shutil
++import subprocess
++import sys
++import threading
++import time
++from dataclasses import dataclass, field
++from datetime import datetime
++from typing import List, Optional
++
++import cv2
++import numpy as np
++import rclpy
++import tyro
++
++# openpi_client: pip install "openpi-client @ git+https://github.com/Physical-Intelligence/openpi.git#subdirectory=packages/openpi-client"
++from openpi_client import image_tools, websocket_client_policy  # noqa: E402
++
++from decoupled_wbc.control.main.pi05.camera_client import CameraClient  # noqa: E402
++from decoupled_wbc.control.main.pi05.observation import create_observation_reader  # noqa: E402
++from decoupled_wbc.control.main.constants import (  # noqa: E402
++    CONTROL_GOAL_TOPIC,
++    DEFAULT_BASE_HEIGHT,
++    DEFAULT_NAV_CMD,
++    DEFAULT_WRIST_POSE,
++    STATE_TOPIC_NAME,
++)
++from decoupled_wbc.control.utils.ros_utils import ROSManager, ROSMsgPublisher  # noqa: E402
++from decoupled_wbc.control.utils.telemetry import Telemetry  # noqa: E402
++
++
++# ============================================================================
++# 28-D UPPER BODY LAYOUT
++# ============================================================================
++
++# Order matters: it is the order the policy was trained on AND the order the
++# WBC's InterpolationPolicy expects in "target_upper_body_pose"
++# (= q[15:43] of the 43-dim robot state).
++UPPER_BODY_GROUPS = (
++    ("left_arm", 7),
++    ("left_hand", 7),
++    ("right_arm", 7),
++    ("right_hand", 7),
++)
++STATE_DIM = sum(n for _, n in UPPER_BODY_GROUPS)  # 28
++
++# Slice per group, derived from UPPER_BODY_GROUPS so the two never drift apart.
++GROUP_SLICES = {}
++_off = 0
++for _name, _n in UPPER_BODY_GROUPS:
++    GROUP_SLICES[_name] = slice(_off, _off + _n)
++    _off += _n
++del _off, _name, _n
++
++ARM_SLICES = (GROUP_SLICES["left_arm"], GROUP_SLICES["right_arm"])
++HAND_SLICES = (GROUP_SLICES["left_hand"], GROUP_SLICES["right_hand"])
++
++@dataclass
++class Pi0PolicyConfig:
++    """Configuration for the openpi (pi0.5) policy loop."""
++
++    # ---- Policy server (openpi websocket, see scripts/serve_policy.py) ----
++    policy_host: str = "localhost"
++    policy_port: int = 8017
++    api_key: Optional[str] = None
++
++    # ---- Camera server ----
++    camera_host: str = "localhost"
++    camera_port: int = 5555
++
++    # ---- Control ----
++    frequency: int = 20  # Hz
++
++    # Must match a training task string exactly; other wording degrades the policy.
++    prompt: str = "pick up the mango and place it in the basket"
++
++    # Camera topics published by the camera server (camera_client.CameraClient).
++    camera_topics: List[str] = field(
++        default_factory=lambda: ["ego_view", "ego_left", "ego_right"]
++    )
++
++    add_stereo_camera: bool = True
++    robot: str = "g1"
++
++    # ---- Observation keys expected by the served policy (g1_dex3_policy.G1Dex3Inputs) ----
++    state_key: str = "observation/state"
++    image_key: str = "observation/ego_view"
++    left_wrist_image_key: str = "observation/ego_left"
++    right_wrist_image_key: str = "observation/ego_right"
++    prompt_key: str = "prompt"
++
++    # Client-side resize_with_pad to NxN before sending (the server does the
++    # same resize internally, so this is bit-identical and ~20x less traffic).
++    # 0 sends the native 480x640 frames.
++    resize_images_to: int = 224
++
++    # ---- Action space ----
++    # "absolute": publish the returned values as-is.
++    # "delta":    publish state_at_inference + returned values (serve_pi05.py default).
++    arm_action_mode: str = "delta"
++    hand_action_mode: str = "absolute"
++
++    # Receding horizon: execute only the first N steps of each chunk before
++    # re-querying the policy. 0 = execute the whole chunk (open loop).
++    execute_steps: int = 25
++
++    # ---- Safety ----
++    # Reject/clamp a command that jumps more than this (rad) away from the
++    # measured joint on the very first tick of a chunk. 0 disables the clamp.
++    max_first_step_jump: float = 0.0
++    # Ramp the first published command from the measured pose over N ticks so
++    # engaging the policy never snaps the arms. 0 disables.
++    startup_ramp_ticks: int = 10
++
++    # ---- Fixed (never policy-driven) base commands ----
++    base_height_command: float = DEFAULT_BASE_HEIGHT
++    navigate_cmd: List[float] = field(default_factory=lambda: list(DEFAULT_NAV_CMD))
++
++    # ---- Probe: one inference, print, exit. Nothing is published. ----
++    probe: bool = False
++
++    # ---- Recording ----
++    record: bool = True
++    record_root: str = "inference_recordings"
++    record_video: bool = True   # ego_view -> video.mp4
++    record_chunks: bool = True  # dump each raw policy action chunk as .npz
++
++
++# ============================================================================
++# OBSERVATION -> POLICY INPUT, POLICY OUTPUT -> ACTION CHUNK
++# ============================================================================
++
++
++def upper_body_state(obs: dict) -> np.ndarray:
++    """Concatenate the arm + hand joint positions into the 28-D policy state.
++
++    Legs, waist, wrist poses, base height and navigate command are dropped
++    here: they are never shown to the policy.
++    """
++    parts = []
++    for name, n in UPPER_BODY_GROUPS:
++        v = obs.get(f"{name}.pos")
++        if v is None:
++            raise KeyError(f"observation is missing '{name}.pos'")
++        v = np.asarray(v, dtype=np.float32).reshape(-1)
++        if v.shape[0] != n:
++            raise ValueError(f"'{name}.pos' should be ({n},), got {v.shape}")
++        parts.append(v)
++    return np.concatenate(parts).astype(np.float32)
++
++
++class Pi0G1Adapter:
++    """Builds openpi observations from G1 observations and decodes the chunk."""
++
++    def __init__(self, client: websocket_client_policy.WebsocketClientPolicy,
++                 config: Pi0PolicyConfig):
++        self.client = client
++        self.config = config
++
++        # obs key -> wire key, only for the cameras we actually send.
++        self.camera_map = {
++            "ego_view": config.image_key,
++            "ego_view_left_mono": config.left_wrist_image_key,
++            "ego_view_right_mono": config.right_wrist_image_key,
++        }
++        if not config.add_stereo_camera:
++            self.camera_map = {"ego_view": config.image_key}
++
++    def _prepare_image(self, img: np.ndarray) -> np.ndarray:
++        img = image_tools.convert_to_uint8(np.asarray(img))
++        n = self.config.resize_images_to
++        if n and n > 0:
++            img = image_tools.resize_with_pad(img, n, n)
++        return np.ascontiguousarray(img, dtype=np.uint8)
++
++    def obs_to_policy_inputs(self, obs: dict) -> dict:
++        """Arms + hands + camera frames + prompt. Nothing else."""
++        model_obs = {
++            self.config.state_key: upper_body_state(obs),
++            self.config.prompt_key: self.config.prompt,
++        }
++        for obs_key, wire_key in self.camera_map.items():
++            frame = obs.get(obs_key)
++            if frame is None:
++                raise KeyError(f"observation is missing camera '{obs_key}'")
++            model_obs[wire_key] = self._prepare_image(frame)
++        return model_obs
++
++    def infer(self, obs: dict) -> np.ndarray:
++        """Return the raw action chunk as (T, 28) float32."""
++        result = self.client.infer(self.obs_to_policy_inputs(obs))
++        actions = np.asarray(result["actions"], dtype=np.float32)
++        if actions.ndim == 3 and actions.shape[0] == 1:  # (1, T, D) -> (T, D)
++            actions = actions[0]
++        if actions.ndim != 2:
++            raise ValueError(f"expected a (T, D) action chunk, got {actions.shape}")
++        if actions.shape[1] < STATE_DIM:
++            raise ValueError(
++                f"action chunk has {actions.shape[1]} dims, need at least {STATE_DIM}"
++            )
++        # pi05 pads 28 real dims out to 32; the tail is padding, drop it.
++        return actions[:, :STATE_DIM]
++
++
++def to_absolute(chunk: np.ndarray, state: np.ndarray, config: Pi0PolicyConfig) -> np.ndarray:
++    """Convert a raw chunk to absolute joint targets.
++
++    Delta blocks are integrated against the state captured at inference time
++    (that is what openpi's ``AbsoluteActions`` does), not against the running
++    state, so an executing chunk stays a single consistent trajectory.
++    """
++    out = np.array(chunk, dtype=np.float32, copy=True)
++    if config.arm_action_mode == "delta":
++        for sl in ARM_SLICES:
++            out[:, sl] += state[sl]
++    if config.hand_action_mode == "delta":
++        for sl in HAND_SLICES:
++            out[:, sl] += state[sl]
++    return out
++
++
++def policy_action_to_control_goal(action: np.ndarray, config: Pi0PolicyConfig,
++                                  now: float) -> dict:
++    """Build the WBC control goal from one 28-D upper-body action.
++
++    Only ``target_upper_body_pose`` comes from the policy. ``base_height_command``
++    and ``navigate_cmd`` are the fixed defaults — the policy never drives them.
++    """
++    return {
++        # arms + hands, in UPPER_BODY_GROUPS order
++        "target_upper_body_pose": np.asarray(action, dtype=np.float32).reshape(-1),
++
++        # Not consumed by the WBC's InterpolationPolicy (its concat_order is
++        # base_height_command / navigate_cmd / target_upper_body_pose); carried
++        # only so the control loop's data export has a sane action.eef.
++        "wrist_pose": np.asarray(DEFAULT_WRIST_POSE, dtype=np.float32),
++
++        # Fixed, never from the policy.
++        "base_height_command": float(config.base_height_command),
++        "navigate_cmd": list(config.navigate_cmd),
++
++        "toggle_policy_action": False,
++        "toggle_data_collection": False,
++        "toggle_data_abort": False,
++
++        "timestamp": now,
++        "target_time": now + (1.0 / config.frequency),
++    }
++
++
++class ActionBuffer:
++    """Holds one absolute (T, 28) chunk and walks through it."""
++
++    def __init__(self, execute_steps: int = 0):
++        self.actions: Optional[np.ndarray] = None
++        self.state_at_inference: Optional[np.ndarray] = None
++        self.horizon = 0
++        self.current_idx = 0
++        # How many steps of a chunk to execute before re-querying the policy.
++        self.execute_steps = int(execute_steps) if execute_steps and execute_steps > 0 else 0
++
++    def set_actions(self, actions: np.ndarray, state: np.ndarray):
++        self.actions = actions
++        self.state_at_inference = state
++        self.horizon = actions.shape[0]
++        self.current_idx = 0
++
++    def get_current_action(self) -> Optional[np.ndarray]:
++        if self.actions is None:
++            return None
++        idx = min(self.current_idx, self.horizon - 1)
++        return self.actions[idx]
++
++    def advance(self):
++        self.current_idx += 1
++
++    def needs_update(self) -> bool:
++        if self.actions is None:
++            return True
++        limit = min(self.execute_steps, self.horizon) if self.execute_steps else self.horizon
++        return self.current_idx >= limit
++
++
++# ============================================================================
++# RECORDING
++# ============================================================================
++
++# State groups pulled out of the observation dict, in a fixed column order.
++_JOINT_STATE_KEYS = [
++    ("left_leg.pos", 6),
++    ("right_leg.pos", 6),
++    ("waist.pos", 3),
++    ("left_arm.pos", 7),
++    ("left_hand.pos", 7),
++    ("right_arm.pos", 7),
++    ("right_hand.pos", 7),
++]
++_WRIST_STATE_KEYS = [
++    ("left_wrist_pos", 3),
++    ("left_wrist_abs_quat", 4),
++    ("right_wrist_pos", 3),
++    ("right_wrist_abs_quat", 4),
++]
++
++
++def _flatten(prefix: str, value) -> list:
++    """Flatten a scalar/array into [(column_name, float), ...]."""
++    arr = np.asarray(value, dtype=np.float64).reshape(-1)
++    if arr.size == 1:
++        return [(prefix, float(arr[0]))]
++    return [(f"{prefix}_{i}", float(v)) for i, v in enumerate(arr)]
++
++
++class _VideoSink:
++    """Appends RGB frames to an mp4 file.
++
++    Prefers piping raw frames to the ``ffmpeg`` binary with H.264, because that
++    is the only combination that produces a file every player accepts. OpenCV's
++    bundled FFmpeg ships an H.264 *decoder* but no encoder, so cv2.VideoWriter
++    can only emit MPEG-4 Part 2 ('FMP4'/'mp4v') — VLC plays those, but browsers,
++    QuickTime, Windows Media Player and the VS Code preview refuse them.
++
++    Backends, in order: ffmpeg+libx264 -> ffmpeg+libopenh264 -> ffmpeg+mpeg4
++    -> cv2+mp4v. ``encoder`` says which one was used; ``ok`` goes False if
++    encoding died mid-run (the run continues, only the video stops).
++    """
++
++    def __init__(self, path: str, fps: int, log_path: str = None):
++        self.path = path
++        self.fps = int(fps)
++        self.log_path = log_path
++        self.size = None      # (width, height), taken from the first frame
++        self.encoder = None   # e.g. "ffmpeg:libx264"
++        self.ok = True
++        self._proc = None
++        self._cv2 = None
++        self._log = None
++
++    @staticmethod
++    def _pick_ffmpeg():
++        """Return (ffmpeg_path, codec) for the best available encoder."""
++        exe = shutil.which("ffmpeg")
++        if exe is None:
++            return None, None
++        try:
++            out = subprocess.run(
++                [exe, "-hide_banner", "-encoders"],
++                capture_output=True, text=True, timeout=20,
++            ).stdout
++        except Exception:
++            return None, None
++        for codec in ("libx264", "libopenh264", "mpeg4"):
++            if f" {codec} " in out:
++                return exe, codec
++        return exe, "mpeg4"
++
++    def _open(self, width: int, height: int) -> bool:
++        self.size = (width, height)
++        exe, codec = self._pick_ffmpeg()
++
++        if exe is not None:
++            cmd = [
++                exe, "-y", "-loglevel", "error",
++                "-f", "rawvideo", "-pix_fmt", "rgb24",
++                "-s", f"{width}x{height}", "-framerate", str(self.fps),
++                "-i", "-", "-an",
++                "-c:v", codec,
++                # yuv420p + even dimensions = maximum player compatibility;
++                # faststart puts the moov atom up front so it streams/seeks.
++                "-pix_fmt", "yuv420p",
++                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
++                "-movflags", "+faststart",
++            ]
++            if codec == "libx264":
++                cmd += ["-preset", "veryfast", "-crf", "20"]
++            cmd.append(self.path)
++            try:
++                self._log = open(self.log_path, "wb") if self.log_path else subprocess.DEVNULL
++                self._proc = subprocess.Popen(
++                    cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self._log,
++                    # Own session: a Ctrl+C in the terminal must not kill ffmpeg
++                    # before we have closed its stdin and let it write the trailer.
++                    start_new_session=True,
++                )
++                self.encoder = f"ffmpeg:{codec}"
++                return True
++            except Exception as e:
++                print(f"⚠️  could not start ffmpeg ({e}); falling back to cv2")
++                self._proc = None
++
++        # Fallback: cv2 (mp4v). Plays in VLC/ffplay, not in most browsers.
++        self._cv2 = cv2.VideoWriter(
++            self.path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (width, height)
++        )
++        if not self._cv2.isOpened():
++            print(f"⚠️  could not open {self.path} for writing; video disabled")
++            self._cv2 = None
++            self.ok = False
++            return False
++        self.encoder = "cv2:mp4v"
++        print("⚠️  ffmpeg unavailable — writing mp4v video (VLC plays it, browsers may not)")
++        return True
++
++    def write(self, frame: np.ndarray) -> bool:
++        """Append one RGB HxWx3 uint8 frame. False means encoding has stopped."""
++        if not self.ok:
++            return False
++        if self.size is None and not self._open(frame.shape[1], frame.shape[0]):
++            return False
++        if frame.shape[1::-1] != self.size:
++            frame = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)
++        if frame.dtype != np.uint8:
++            frame = np.clip(frame, 0, 255).astype(np.uint8)
++
++        if self._proc is not None:
++            try:
++                self._proc.stdin.write(np.ascontiguousarray(frame).tobytes())
++                return True
++            except (BrokenPipeError, OSError, ValueError) as e:
++                self.ok = False
++                print(f"⚠️  ffmpeg stopped accepting frames ({e}); see {self.log_path}")
++                return False
++
++        # obs frames are RGB, cv2 wants BGR
++        self._cv2.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
++        return True
++
++    def close(self):
++        """Finalize the container. Without this the mp4 has no moov atom."""
++        if self._proc is not None:
++            try:
++                self._proc.stdin.close()
++            except Exception:
++                pass
++            try:
++                rc = self._proc.wait(timeout=120)
++            except subprocess.TimeoutExpired:
++                self._proc.kill()
++                rc = self._proc.wait()
++            if rc != 0:
++                self.ok = False
++                print(f"⚠️  ffmpeg exited with code {rc}; see {self.log_path}")
++            self._proc = None
++        if self._cv2 is not None:
++            self._cv2.release()
++            self._cv2 = None
++        if self._log not in (None, subprocess.DEVNULL):
++            self._log.close()
++            self._log = None
++        # Drop an empty ffmpeg.log so a clean run leaves no confusing file.
++        if self.log_path and os.path.exists(self.log_path) and os.path.getsize(self.log_path) == 0:
++            os.remove(self.log_path)
++
++
++class InferenceRecorder:
++    """Records one inference run into its own ``inference_NN/`` folder.
++
++    Recording starts when the object is created and is finalized by close()
++    (called from the control loop's ``finally``, so Ctrl+C saves everything).
++
++    Layout::
++
++        <root>/inference_01/
++            meta.json               run config + totals (n_chunks, n_ticks, ...)
++            steps.csv               one row per control tick
++            video.mp4               the ego_view camera, one frame per tick
++            chunks.csv              one row per policy call (chunk)
++            chunks/chunk_00001.npz  raw + absolute chunk, and the state it used
++
++    ``steps.csv`` columns: tick metadata (iteration/timings/chunk_idx/
++    action_idx/horizon/new_inference/inference_latency_s/video_frame),
++    ``state_*`` (the robot joint + wrist state read from ROS), ``act_*``
++    (the absolute policy action for this tick, per joint group) and ``pub_*``
++    (what was actually published to the WBC). ``video_frame`` is the 0-based
++    frame index in video.mp4 for that tick (-1 if no frame was recorded), so
++    plots line up with the video exactly.
++
++    All disk I/O happens on a background thread so the control loop only pays
++    for row assembly. Rows and video frames are enqueued together and never
++    shed independently, so the CSV <-> video mapping always holds.
++    """
++
++    # Only the main ego view is recorded; the wrist/stereo views are not.
++    VIDEO_CAMERA_KEY = "ego_view"
++
++    def __init__(
++        self,
++        root: str,
++        config: "Pi0PolicyConfig",
++        record_video: bool = True,
++        record_chunks: bool = True,
++        fps: int = 20,
++        queue_size: int = 240,
++    ):
++        self.record_video = record_video
++        self.record_chunks = record_chunks
++        self.fps = int(fps) if fps and fps > 0 else 20
++
++        # ---- allocate the next inference_NN folder -------------------------
++        os.makedirs(root, exist_ok=True)
++        used = [
++            int(m.group(1))
++            for m in (re.fullmatch(r"inference_(\d+)", d) for d in os.listdir(root))
++            if m
++        ]
++        self.run_id = (max(used) + 1) if used else 1
++        self.run_dir = os.path.join(root, f"inference_{self.run_id:02d}")
++        os.makedirs(self.run_dir)
++
++        self.video_path = os.path.join(self.run_dir, "video.mp4")
++        self._sink = (
++            _VideoSink(self.video_path, self.fps,
++                       log_path=os.path.join(self.run_dir, "ffmpeg.log"))
++            if self.record_video else None
++        )
++        self.n_frames = 0
++
++        self.chunks_dir = os.path.join(self.run_dir, "chunks")
++        if self.record_chunks:
++            os.makedirs(self.chunks_dir, exist_ok=True)
++
++        # ---- csv writers (steps.csv header is built from the first row) ----
++        self._steps_f = open(os.path.join(self.run_dir, "steps.csv"), "w", newline="")
++        self._steps_w = None
++        self._chunks_f = open(os.path.join(self.run_dir, "chunks.csv"), "w", newline="")
++        self._chunks_w = csv.writer(self._chunks_f)
++        self._chunks_w.writerow([
++            "chunk_idx", "iteration", "wall_time", "inference_latency_s",
++            "horizon", "steps_executed", "npz_file",
++        ])
++
++        # ---- counters ------------------------------------------------------
++        self.n_ticks = 0
++        self.n_chunks = 0
++        self.n_dropped_rows = 0
++        self.n_dropped_frames = 0
++        self._pending_chunk = None
++        self._last_iteration = 0
++        self._t_start_mono = time.monotonic()
++        self._last_t_mono = None
++
++        self._meta = {
++            "status": "running",
++            "started_at": datetime.now().isoformat(timespec="seconds"),
++            "policy": "openpi",
++            "run_dir": self.run_dir,
++            "config": {k: v for k, v in vars(config).items()},
++            "upper_body_groups": [list(g) for g in UPPER_BODY_GROUPS],
++        }
++        self._write_meta()
++
++        # ---- background writer --------------------------------------------
++        self._q = queue.Queue(maxsize=queue_size)
++        self._closed = False
++        self._thread = threading.Thread(target=self._writer_loop, daemon=True)
++        self._thread.start()
++
++        what = "state + actions" + (" + ego_view video" if self.record_video else "")
++        print(f"📼 Recording {what} to {self.run_dir}")
++
++    # -- public API ---------------------------------------------------------
++
++    def log(
++        self,
++        *,
++        iteration: int,
++        obs: dict,
++        action: Optional[np.ndarray],
++        control_cmd: dict,
++        chunk_idx: int,
++        action_idx: int,
++        horizon: int,
++        new_inference: bool,
++        inference_latency_s: float,
++        loop_time: float,
++        new_chunk: dict = None,
++    ):
++        """Record one control tick (call once per published command)."""
++        if self._closed:
++            return
++
++        t_mono = time.monotonic()
++        dt = 0.0 if self._last_t_mono is None else (t_mono - self._last_t_mono)
++        self._last_t_mono = t_mono
++
++        row = {
++            "iteration": iteration,
++            "wall_time": time.time(),
++            "t_mono": t_mono,
++            "t_elapsed": t_mono - self._t_start_mono,
++            "dt_since_last": dt,
++            "loop_time": loop_time,
++            "chunk_idx": chunk_idx,
++            "action_idx": action_idx,
++            "horizon": horizon,
++            "new_inference": 1 if new_inference else 0,
++            "inference_latency_s": inference_latency_s,
++            # filled in by the writer thread once the frame is actually encoded
++            "video_frame": -1,
++        }
++
++        # Robot state as read from ROS (superset of what the policy sees).
++        for key, n in _JOINT_STATE_KEYS:
++            v = obs.get(key, np.zeros(n, dtype=np.float32))
++            row.update(_flatten(f"state_{key.replace('.pos', '')}", v))
++        for key, n in _WRIST_STATE_KEYS:
++            v = obs.get(key, np.zeros(n, dtype=np.float32))
++            row.update(_flatten(f"state_{key}", v))
++
++        # Absolute policy action for this tick, split back into joint groups.
++        if action is not None:
++            a = np.asarray(action).reshape(-1)
++            for name, sl in GROUP_SLICES.items():
++                row.update(_flatten(f"act_{name}", a[sl]))
++
++        # What actually went out to the WBC.
++        for key in ("target_upper_body_pose", "wrist_pose", "base_height_command", "navigate_cmd"):
++            if key in control_cmd:
++                row.update(_flatten(f"pub_{key}", control_cmd[key]))
++
++        self.n_ticks += 1
++        self._last_iteration = iteration
++
++        # Chunk bookkeeping: finalize the previous chunk's executed-step count.
++        chunk_job = None
++        if new_inference:
++            if self._pending_chunk is not None:
++                self._pending_chunk["steps_executed"] = (
++                    iteration - self._pending_chunk["iteration"]
++                )
++                self._q_put({"chunk_row": self._pending_chunk})
++            self.n_chunks += 1
++            npz_name = f"chunk_{chunk_idx:05d}.npz" if self.record_chunks else ""
++            self._pending_chunk = {
++                "chunk_idx": chunk_idx,
++                "iteration": iteration,
++                "wall_time": row["wall_time"],
++                "inference_latency_s": inference_latency_s,
++                "horizon": horizon,
++                "steps_executed": 0,
++                "npz_file": npz_name,
++            }
++            if self.record_chunks and new_chunk is not None:
++                chunk_job = (npz_name, {
++                    k: np.asarray(v) for k, v in new_chunk.items()
++                    if isinstance(v, (np.ndarray, list, tuple))
++                })
++
++        frame = None
++        if self.record_video:
++            f = obs.get(self.VIDEO_CAMERA_KEY)
++            if isinstance(f, np.ndarray):
++                frame = f
++
++        self._q_put({
++            "row": row,
++            "frame": frame,
++            "iteration": iteration,
++            "chunk_npz": chunk_job,
++        })
++
++    def close(self):
++        """Flush the writer thread and finalize meta.json."""
++        if self._closed:
++            return
++        self._closed = True
++
++        if self._pending_chunk is not None:
++            self._pending_chunk["steps_executed"] = (
++                self._last_iteration + 1 - self._pending_chunk["iteration"]
++            )
++            self._q.put({"chunk_row": self._pending_chunk})
++            self._pending_chunk = None
++
++        self._q.put(None)  # sentinel
++        self._thread.join(timeout=60.0)
++
++        self._steps_f.close()
++        self._chunks_f.close()
++
++        # Finalizes the mp4 container (without this it has no moov atom).
++        if self._sink is not None:
++            self._sink.close()
++
++        duration = time.monotonic() - self._t_start_mono
++        self._meta.update({
++            "status": "finished",
++            "ended_at": datetime.now().isoformat(timespec="seconds"),
++            "duration_s": round(duration, 3),
++            "n_ticks": self.n_ticks,
++            "n_chunks_executed": self.n_chunks,
++            "n_video_frames": self.n_frames,
++            "video_size": list(self._sink.size) if (self._sink and self._sink.size) else None,
++            "video_encoder": self._sink.encoder if self._sink else None,
++            "mean_tick_hz": round(self.n_ticks / duration, 2) if duration > 0 else None,
++            "n_dropped_frames": self.n_dropped_frames,
++            "n_dropped_rows": self.n_dropped_rows,
++        })
++        self._write_meta()
++
++        print(f"📼 Recorded {self.n_ticks} ticks / {self.n_chunks} chunks / "
++              f"{self.n_frames} video frames -> {self.run_dir}")
++        if self.n_dropped_rows:
++            print(f"   ⚠️  dropped {self.n_dropped_rows} ticks "
++                  f"({self.n_dropped_frames} with a frame) — writer fell behind")
++
++    # -- internals ----------------------------------------------------------
++
++    def _write_meta(self):
++        with open(os.path.join(self.run_dir, "meta.json"), "w") as f:
++            json.dump(self._meta, f, indent=2, default=str)
++
++    def _q_put(self, job: dict):
++        """Enqueue without meaningfully blocking the control loop.
++
++        A row and its video frame are dropped together (never separately) so
++        the video_frame index in steps.csv always points at the right frame.
++        """
++        try:
++            self._q.put_nowait(job)
++        except queue.Full:
++            self.n_dropped_rows += 1
++            if job.get("frame") is not None:
++                self.n_dropped_frames += 1
++
++    def _write_frame(self, frame: np.ndarray) -> bool:
++        """Append one RGB frame to video.mp4 (writer thread only)."""
++        if self._sink is None or not self._sink.ok:
++            return False
++        if not self._sink.write(frame):
++            self.record_video = False   # keep logging state/actions regardless
++            return False
++        self.n_frames += 1
++        return True
++
++    def _writer_loop(self):
++        while True:
++            job = self._q.get()
++            if job is None:
++                break
++            try:
++                if "chunk_row" in job:
++                    c = job["chunk_row"]
++                    self._chunks_w.writerow([
++                        c["chunk_idx"], c["iteration"], c["wall_time"],
++                        c["inference_latency_s"], c["horizon"],
++                        c["steps_executed"], c["npz_file"],
++                    ])
++                    self._chunks_f.flush()
++                    continue
++
++                row = job.get("row")
++
++                # Encode the frame first so the row can carry its frame index.
++                frame = job.get("frame")
++                if frame is not None and self._write_frame(frame) and row is not None:
++                    row["video_frame"] = self.n_frames - 1
++
++                if row is not None:
++                    if self._steps_w is None:
++                        self._steps_w = csv.DictWriter(
++                            self._steps_f, fieldnames=list(row.keys()),
++                            restval="", extrasaction="ignore",
++                        )
++                        self._steps_w.writeheader()
++                    self._steps_w.writerow(row)
++                    self._steps_f.flush()
++
++                chunk_npz = job.get("chunk_npz")
++                if chunk_npz is not None:
++                    name, arrays = chunk_npz
++                    np.savez(os.path.join(self.chunks_dir, name), **arrays)
++            except Exception as e:  # never let a write error kill the run
++                print(f"⚠️  recorder write failed: {e}")
++
++
++# ============================================================================
++# PROBE
++# ============================================================================
++
++
++def run_probe(adapter: Pi0G1Adapter, obs_reader, config: Pi0PolicyConfig) -> None:
++    """One inference, printed both ways. Publishes nothing."""
++    np.set_printoptions(precision=3, suppress=True, linewidth=200)
++
++    obs = obs_reader.get_observation(config.prompt)
++    state = upper_body_state(obs)
++
++    model_obs = adapter.obs_to_policy_inputs(obs)
++    print("\nSending to the policy server:")
++    for k, v in model_obs.items():
++        arr = np.asarray(v)
++        if arr.dtype.kind in "US" or arr.ndim == 0:
++            print(f"  {k}: {v!r}")
++        else:
++            print(f"  {k}: shape={arr.shape} dtype={arr.dtype}")
++
++    t0 = time.monotonic()
++    raw = adapter.infer(obs)
++    print(f"\nGot chunk {raw.shape} in {(time.monotonic() - t0) * 1000:.1f} ms "
++          f"(finite={np.isfinite(raw).all()})")
++
++    for name, sl in GROUP_SLICES.items():
++        print(f"\n  {name}")
++        print(f"    measured state       {state[sl]}")
++        print(f"    raw   action[0]      {raw[0][sl]}")
++        print(f"    raw   action[-1]     {raw[-1][sl]}")
++        print(f"    state + action[0]    {state[sl] + raw[0][sl]}")
++
++    print("\nRead it like this: for each group, whichever of "
++          "'raw action[0]' / 'state + action[0]' sits closest to the measured "
++          "state is the correct interpretation. Set --arm-action-mode / "
++          "--hand-action-mode accordingly.")
++    print("Runbook §17 trained this checkpoint with delta arms + absolute "
++          "hands; the server undoes the delta only if its config keeps the "
++          "AbsoluteActions output transform.")
++
++
++# ============================================================================
++# MAIN
++# ============================================================================
++
++
++def main(config: Pi0PolicyConfig):
++    """Main openpi (pi0.5) policy loop."""
++
++    for name, mode in (("arm", config.arm_action_mode), ("hand", config.hand_action_mode)):
++        if mode not in ("absolute", "delta"):
++            raise SystemExit(f"--{name}-action-mode must be 'absolute' or 'delta', got {mode!r}")
++
++    print("=" * 80)
++    print("PI0.5 (openpi) G1 POLICY CONTROL LOOP")
++    print("=" * 80)
++    print(f"Policy server:  ws://{config.policy_host}:{config.policy_port}")
++    print(f"Camera server:  {config.camera_host}:{config.camera_port}")
++    print(f"Frequency:      {config.frequency} Hz")
++    print(f"Prompt:         '{config.prompt}'")
++    print(f"Action mode:    arms={config.arm_action_mode} hands={config.hand_action_mode}")
++    print(f"To the policy:  arms + hands ({STATE_DIM}-D) + cameras + prompt")
++    print(f"                (no legs/waist/wrist-pose/base-height/navigate)")
++    print(f"To the robot:   arms + hands only; "
++          f"base_height={config.base_height_command} navigate={list(config.navigate_cmd)}")
++    print("=" * 80)
++
++    # Create observation reader FIRST (it initializes ROS internally)
++    print("\n[1] Creating observation reader...")
++    topics = config.camera_topics if config.add_stereo_camera else config.camera_topics[:1]
++    camera_client = CameraClient(config.camera_host, config.camera_port, topics)
++    obs_reader = create_observation_reader(
++        image_client=camera_client,
++        camera_host=config.camera_host,
++        camera_port=config.camera_port,
++        state_topic_name=STATE_TOPIC_NAME,
++        frequency=config.frequency,
++        add_stereo_camera=config.add_stereo_camera,
++    )
++
++    ros_manager = None
++    recorder = None
++    try:
++        # Now create ROS manager (ROS already initialized by obs_reader)
++        print("[2] Initializing ROS manager and publisher...")
++        ros_manager = ROSManager(node_name="Pi0Policy")
++        node = ros_manager.node
++
++        # Create control publisher (same topic as teleop)
++        control_publisher = ROSMsgPublisher(CONTROL_GOAL_TOPIC)
++
++        print("[3] Waiting for first observations...")
++        if not obs_reader.wait_until_ready(timeout=10.0):
++            print("❌ Failed to get observations!")
++            state_msg, _ = obs_reader.get_latest_messages()
++            if state_msg is None:
++                print(f"   - no robot state on {STATE_TOPIC_NAME} "
++                      "(is the control loop running? ROS_LOCALHOST_ONLY=1?)")
++            missing = camera_client.missing_topics()
++            if missing:
++                print(f"   - no frames for camera topics {missing} from "
++                      f"{config.camera_host}:{config.camera_port}; check what the server "
++                      "publishes with `python clinet.py` and set --camera-topics")
++            return
++        print("✅ Observations ready!")
++
++        print(f"\n[4] Connecting to the openpi policy server...")
++        client = websocket_client_policy.WebsocketClientPolicy(
++            host=config.policy_host, port=config.policy_port, api_key=config.api_key
++        )
++        print(f"✅ Connected. Server metadata: {client.get_server_metadata()}")
++
++        print("\n[5] Initializing adapter...")
++        adapter = Pi0G1Adapter(client, config)
++
++        if config.probe:
++            run_probe(adapter, obs_reader, config)
++            return
++
++        action_buffer = ActionBuffer(execute_steps=config.execute_steps)
++
++        if config.record:
++            recorder = InferenceRecorder(
++                root=config.record_root,
++                config=config,
++                record_video=config.record_video,
++                record_chunks=config.record_chunks,
++                fps=config.frequency,
++            )
++
++        rate = node.create_rate(config.frequency)
++        telemetry = Telemetry(window_size=100)
++
++        iteration = 0
++        chunk_idx = 0            # how many action chunks the policy has produced
++        inference_latency = 0.0  # latency of the most recent policy call
++        ramp_start = None        # measured pose the startup ramp blends out of
++
++        print("\n[6] Starting control loop...")
++        print("Press Ctrl+C to stop\n")
++
++        while rclpy.ok():
++            with telemetry.timer("total_loop"):
++                t_start = time.monotonic()
++
++                obs = obs_reader.get_observation(config.prompt)
++                if obs is None:
++                    print("⚠️  No observation available")
++                    rate.sleep()
++                    continue
++
++                state = upper_body_state(obs)
++                if ramp_start is None:
++                    ramp_start = state.copy()
++
++                # Get a new chunk if the current one is exhausted.
++                new_inference = action_buffer.needs_update()
++                new_chunk = None
++                if new_inference:
++                    with telemetry.timer("get_action_chunk"):
++                        t_infer = time.monotonic()
++                        raw_chunk = adapter.infer(obs)
++                        inference_latency = time.monotonic() - t_infer
++
++                    abs_chunk = to_absolute(raw_chunk, state, config)
++                    action_buffer.set_actions(abs_chunk, state)
++                    chunk_idx += 1
++                    new_chunk = {
++                        "raw": raw_chunk,
++                        "absolute": abs_chunk,
++                        "state_at_inference": state,
++                    }
++
++                    if iteration == 0:
++                        print(f"\n✅ Action horizon: {abs_chunk.shape[0]} timesteps "
++                              f"x {abs_chunk.shape[1]} dims")
++                        exec_n = action_buffer.execute_steps or abs_chunk.shape[0]
++                        print(f"   Executing {exec_n} step(s) per chunk "
++                              f"(~{exec_n / config.frequency:.2f} s open loop)\n")
++
++                action = action_buffer.get_current_action()
++
++                # --- safety: never let the first command snap the arms -------
++                if config.startup_ramp_ticks and iteration < config.startup_ramp_ticks:
++                    alpha = (iteration + 1) / float(config.startup_ramp_ticks)
++                    action = (1.0 - alpha) * ramp_start + alpha * action
++
++                if config.max_first_step_jump > 0 and action_buffer.current_idx == 0:
++                    jump = np.abs(action - state)
++                    if jump.max() > config.max_first_step_jump:
++                        worst = int(jump.argmax())
++                        print(f"⚠️  chunk {chunk_idx} step 0 jumps {jump.max():.3f} rad "
++                              f"at dim {worst}; clamping to ±{config.max_first_step_jump}")
++                        action = np.clip(
++                            action,
++                            state - config.max_first_step_jump,
++                            state + config.max_first_step_jump,
++                        )
++
++                with telemetry.timer("convert_to_control_goal"):
++                    t_now = time.monotonic()
++                    control_cmd = policy_action_to_control_goal(action, config, t_now)
++
++                with telemetry.timer("publish_control"):
++                    control_publisher.publish(control_cmd)
++
++                if recorder is not None:
++                    recorder.log(
++                        iteration=iteration,
++                        obs=obs,
++                        action=action,
++                        control_cmd=control_cmd,
++                        chunk_idx=chunk_idx,
++                        action_idx=action_buffer.current_idx,
++                        horizon=action_buffer.horizon,
++                        new_inference=new_inference,
++                        inference_latency_s=inference_latency,
++                        loop_time=time.monotonic() - t_start,
++                        new_chunk=new_chunk,
++                    )
++
++                action_buffer.advance()
++
++                if iteration % config.frequency == 0:  # roughly every second
++                    print(f"[Loop {iteration}] "
++                          f"Time: {time.monotonic() - t_start:.3f}s | "
++                          f"Chunk: {chunk_idx} | "
++                          f"Action idx: {action_buffer.current_idx}/{action_buffer.horizon} | "
++                          f"Infer: {inference_latency * 1000:.0f} ms")
++
++                iteration += 1
++
++            end_time = time.monotonic()
++            if (end_time - t_start) > (1 / config.frequency):
++                telemetry.log_timing_info(context="pi0 Policy Loop Missed", threshold=0.001)
++
++            rate.sleep()
++
++    except KeyboardInterrupt:
++        print("\n\n🛑 Shutting down...")
++
++    finally:
++        print("\nCleaning up...")
++        if recorder is not None:
++            recorder.close()
++        obs_reader.shutdown()
++        if ros_manager is not None:
++            ros_manager.shutdown()
++        print("✅ Shutdown complete!")
++
++
++if __name__ == "__main__":
++    main(tyro.cli(Pi0PolicyConfig))
 diff --git a/decoupled_wbc/control/main/teleop/configs/configs.py b/decoupled_wbc/control/main/teleop/configs/configs.py
 index 6491086..20fba65 100644
 --- a/decoupled_wbc/control/main/teleop/configs/configs.py
@@ -189,6 +1838,29 @@ index aae1fe0..997c075 100644
  
      if add_to_existing_dataset == "y":
          config.dataset_name = input("Enter the dataset name: ").strip().lower()
+diff --git a/decoupled_wbc/control/robot_model/supplemental_info/g1/g1_supplemental_info.py b/decoupled_wbc/control/robot_model/supplemental_info/g1/g1_supplemental_info.py
+index da7dc65..9e20874 100644
+--- a/decoupled_wbc/control/robot_model/supplemental_info/g1/g1_supplemental_info.py
++++ b/decoupled_wbc/control/robot_model/supplemental_info/g1/g1_supplemental_info.py
+@@ -1,3 +1,4 @@
++import os
+ from dataclasses import dataclass
+ from enum import Enum
+ 
+@@ -293,6 +294,13 @@ class G1SupplementalInfo(RobotSupplementalInfo):
+             default_joint_q = {
+                 "shoulder_roll": {"left": 0.2, "right": -0.2},
+             }
++            # Opt-in, for sim scenes whose objects sit under the resting hands:
++            # G1_DEFAULT_ELBOW (rad, negative = bend more) raises both hands in
++            # place - -0.3 lifts them 8 cm and moves them 1 cm back. Unset (the
++            # default, and the real robot) leaves the stock pose unchanged.
++            elbow = os.environ.get("G1_DEFAULT_ELBOW")
++            if elbow:
++                default_joint_q["elbow_pitch"] = {"left": float(elbow), "right": float(elbow)}
+ 
+         teleop_upper_body_motion_scale = 1.0
+ 
 diff --git a/decoupled_wbc/control/sensor/vla_image_client.py b/decoupled_wbc/control/sensor/vla_image_client.py
 new file mode 100644
 index 0000000..b8d5d50

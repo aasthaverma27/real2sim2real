@@ -5,9 +5,9 @@
 ### Photoreal digital twins from a phone video, for training humanoid VLA policies without real-world data
 
 <!-- Authors and affiliations go here, e.g.
-[Name](link)<sup>1</sup>, [Name](link)<sup>1</sup>  ·  <sup>1</sup>MethdAI -->
+[Name](link)<sup>1</sup>, [Name](link)<sup>1</sup>  ·  <sup>1</sup>Affiliation -->
 
-[![Code](https://img.shields.io/badge/Code-GitHub-black?logo=github)](https://github.com/MethdAI-Modinoid/real2sim2real)
+[![Code](https://img.shields.io/badge/Code-GitHub-black?logo=github)](https://github.com/aasthaverma27/real2sim2real)
 [![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-pi05--g1--fruit--v2-yellow)](https://huggingface.co/aasthaverma27/pi05-g1-fruit-v2)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
@@ -128,7 +128,7 @@ Teleoperation also needs docker and a Pico 4 or 4 Ultra headset. Fine-tuning
 
 ```bash
 sudo apt install git-lfs && git lfs install
-git clone https://github.com/MethdAI-Modinoid/real2sim2real.git
+git clone https://github.com/aasthaverma27/real2sim2real.git
 cd real2sim2real
 git lfs pull                                         # prebuilt scenes
 
@@ -392,8 +392,8 @@ and model weights keep their own licenses.
 ```bibtex
 @misc{real2sim2real2026,
   title        = {Real2Sim2Real: Photoreal Digital Twins from a Phone Video for Training Humanoid VLA Policies},
-  author       = {MethdAI-Modinoid},
+  author       = {Verma, Aastha},
   year         = {2026},
-  howpublished = {\url{https://github.com/MethdAI-Modinoid/real2sim2real}}
+  howpublished = {\url{https://github.com/aasthaverma27/real2sim2real}}
 }
 ```

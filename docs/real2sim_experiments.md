@@ -440,7 +440,7 @@ side of the room. That rules out 92.50 and 353.75 and brackets the answer to
 
 `scripts/tune_splat_yaw.py` exposes yaw as a single knob, blended against the
 photograph, re-rendering instantly because the splat stays put and the camera
-is inverse-transformed. **Sudhir picked 268.00 deg by eye in seconds**, and it
+is inverse-transformed. **Picking it by eye gave 268.00 deg in seconds**, and it
 is visibly correct where all five fits were not: the glass window returns to
 where the photograph has it, the backpack to the left, the wall panelling
 aligned.

@@ -88,7 +88,8 @@ The simulator is built to close the two gaps a visuomotor policy can see.
 [`pi05-g1-fruit-v2`](https://huggingface.co/aasthaverma27/pi05-g1-fruit-v2) at
 step 10,000. It was trained on 412 simulated episodes and no real-robot data.
 The prompt is *"pick up the mango and place it in the basket"*. The clips are
-from the head camera and play at 3–4× speed.
+from the head camera and play at 3–4× speed. They are two example rollouts, not
+a measured success rate; a systematic real-robot evaluation is in progress.
 
 <table>
 <tr>
@@ -313,9 +314,12 @@ uv run --project external/openpi python scripts/pi05/serve_pi05.py --checkpoint-
 # policy loop, inside the WBC container with the controller running
 python decoupled_wbc/control/main/pi05/run_pi05_policy.py --probe --policy-host <gpu-host>
 python decoupled_wbc/control/main/pi05/run_pi05_policy.py --policy-host <gpu-host> \
+    --frequency 25 --execute-steps 25 \
     --prompt "pick up the mango and place it in the basket"
 ```
 
+Most real-robot runs used these settings: 25 Hz, 25-step chunks, arm deltas
+and absolute hand targets (the last three are the defaults).
 In simulation, start the scene with `--vla`. On the real robot, add
 `--camera-host <robot-ip>`. Every rollout is saved to `inference_recordings/`
 with the head-camera video and each action chunk.

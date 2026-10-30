@@ -1,19 +1,25 @@
-RoboSnap
-Copyright 2026 RoboSnap authors
+Real2Sim2Real
+Copyright 2026 Aastha Verma
 
 This repository's first-party source code is licensed under the Apache
 License, Version 2.0. See LICENSE.
 
-The top-level Apache-2.0 license applies only to first-party RoboSnap code,
-including the public RoboSnap package, launch scripts, configuration templates,
-documentation, and release-check helpers, unless a file states otherwise.
+This repository includes code from RoboSnap (https://robosnap.github.io),
+licensed under the Apache License, Version 2.0. It is used for single-image
+object reconstruction and lives in the robosnap/ package and the scripts it
+ships with (scripts/gui/ and the automatic-pipeline install and run scripts).
+RoboSnap's attribution notice is reproduced below as the license requires:
 
-Third-party source snapshots under third_party/ remain under their upstream
-licenses. Their upstream LICENSE, NOTICE, COPYING, AUTHORS, or equivalent
-files are retained in place and govern those components. Adapted third-party
-files are distributed as modifications of the upstream projects and remain
-subject to the upstream license terms for those projects.
+    RoboSnap
+    Copyright 2026 RoboSnap authors
+
+Third-party source snapshots under third_party/ and the submodules under
+external/ remain under their upstream licenses. Their upstream LICENSE, NOTICE,
+COPYING, AUTHORS, or equivalent files are retained in place and govern those
+components. Adapted third-party files are distributed as modifications of the
+upstream projects and remain subject to the upstream license terms; the
+modifications are kept as patches under patches/.
 
 Model checkpoints, pretrained weights, datasets, generated assets, and local
-runtime outputs are not licensed by this top-level NOTICE or LICENSE. They are
-covered by their own upstream terms or dataset release terms.
+runtime outputs are not licensed by this NOTICE or LICENSE. They are covered by
+their own upstream terms or dataset release terms.

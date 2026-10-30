@@ -86,7 +86,7 @@ cd external/GR00T-WholeBodyControl && ./decoupled_wbc/docker/run_docker.sh --roo
 Then, from another terminal (`start.sh` also prints this command):
 
 ```bash
-docker exec -it -w /root/Projects/GR00T-WholeBodyControl \
+docker exec -it -w /root/Projects/GR00T-WholeBodyControl -e ROS_LOCALHOST_ONLY=1 \
     -e PYTHONPATH=/root/Projects/GR00T-WholeBodyControl decoupled_wbc-bash-root bash -c '
   source /root/venv/bin/activate; source /opt/ros/humble/setup.bash
   python decoupled_wbc/control/main/teleop/run_g1_control_loop.py \
@@ -100,7 +100,7 @@ docker exec -it -w /root/Projects/GR00T-WholeBodyControl \
 
 Press `]` in this terminal and confirm `Use policy action: True`. Keys typed
 here are republished on the ROS topic `/Gr00tKeyboardListener`, which is how
-the teleop loop and the exporter hear them. Three details fail silently:
+the teleop loop and the exporter hear them. Four details fail silently:
 
 - **`PYTHONPATH`**: makes the mounted, patched checkout win over the copy baked
   into the image, whose config says `DOMAIN_ID: 0` (the real robot). Without
@@ -110,6 +110,11 @@ the teleop loop and the exporter hear them. Three details fail silently:
 - **the two `source` lines**: `docker exec` skips `.bashrc`, so without them
   the result is `ModuleNotFoundError: rclpy`. Append to `PYTHONPATH`; never
   replace it.
+- **`ROS_LOCALHOST_ONLY=1`**: keeps ROS 2 discovery on this machine. Every
+  container shell below (teleop, exporter, π0.5 policy loop) must set the same
+  value, or its node does not see the controller's topics.
+
+If your user is not in the `docker` group, prefix the `docker` commands with `sudo`.
 
 ## 3. Teleoperation (container)
 
@@ -118,7 +123,7 @@ headset (`ip route get <headset-ip>` prints it as `src`). The container uses
 `--network=host`, so no ports need mapping. Then, in a second container shell:
 
 ```bash
-docker exec -it decoupled_wbc-bash-root bash
+docker exec -it -e ROS_LOCALHOST_ONLY=1 decoupled_wbc-bash-root bash
 source /root/venv/bin/activate; source /opt/ros/humble/setup.bash
 cd /root/Projects/GR00T-WholeBodyControl
 PYTHONPATH=/root/Projects/GR00T-WholeBodyControl:$PYTHONPATH \
@@ -155,7 +160,7 @@ python decoupled_wbc/scripts/zmq_probe.py --connect tcp://localhost:5555 --secon
 #   topics seen: stereo/right, hand_left, hand_right
 ```
 
-Then, in a third container shell:
+Then, in a third container shell (opened the same way, with `-e ROS_LOCALHOST_ONLY=1`):
 
 ```bash
 PYTHONPATH=/root/Projects/GR00T-WholeBodyControl:$PYTHONPATH \

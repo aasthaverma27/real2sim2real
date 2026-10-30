@@ -312,6 +312,9 @@ huggingface-cli download aasthaverma27/pi05-g1-fruit-v2 --include "10000/*" --lo
 uv run --project external/openpi python scripts/pi05/serve_pi05.py --checkpoint-dir checkpoints/pi05_g1_fruit_v2/10000
 
 # policy loop, inside the WBC container with the controller running
+docker exec -it -w /root/Projects/GR00T-WholeBodyControl -e ROS_LOCALHOST_ONLY=1 decoupled_wbc-bash-root bash
+source /root/venv/bin/activate; source /opt/ros/humble/setup.bash
+export PYTHONPATH=/root/Projects/GR00T-WholeBodyControl:$PYTHONPATH
 python decoupled_wbc/control/main/pi05/run_pi05_policy.py --probe --policy-host <gpu-host>
 python decoupled_wbc/control/main/pi05/run_pi05_policy.py --policy-host <gpu-host> \
     --frequency 25 --execute-steps 25 \
@@ -320,6 +323,9 @@ python decoupled_wbc/control/main/pi05/run_pi05_policy.py --policy-host <gpu-hos
 
 Most real-robot runs used these settings: 25 Hz, 25-step chunks, arm deltas
 and absolute hand targets (the last three are the defaults).
+Every container process (controller, teleop, exporter, policy loop) needs
+`ROS_LOCALHOST_ONLY=1`, or the nodes do not see each other. Prefix `docker`
+with `sudo` if your user is not in the docker group.
 In simulation, start the scene with `--vla`. On the real robot, add
 `--camera-host <robot-ip>`. Every rollout is saved to `inference_recordings/`
 with the head-camera video and each action chunk.

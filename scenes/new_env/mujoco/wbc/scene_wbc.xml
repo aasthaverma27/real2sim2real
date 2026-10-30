@@ -385,7 +385,7 @@
             <camera name="elp_left" quat="0.67746 0.202603 -0.202603 -0.67746" resolution="768 432" pos="0.11727 0.03138 0.44376" fovy="53.35"/>
             <body name="lidar_link" pos="0 0 0.7">
               <inertial pos="0 0 0" mass="0.001" diaginertia="1e-09 1e-09 1e-09"/>
-              <site name="lidar_origin" size="0.02" rgba="0 1 0 1"/>
+              <site name="lidar_origin" size="0.02" rgba="0 1 0 0"/>
               <site name="rf00" quat="0.707105 0 0.707108 0" rgba="1 0 0 0"/>
               <site name="rf01" quat="0.706432 -0.0308436 0.706435 0.0308435" rgba="1 0 0 0"/>
               <site name="rf02" quat="0.704415 -0.0616286 0.704417 0.0616283" rgba="1 0 0 0"/>
@@ -484,8 +484,8 @@
                       <joint name="left_wrist_roll_joint" class="arm_motor" range="-1.97222 1.97222" actuatorfrcrange="-25 25" axis="1 0 0"/>
                       <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="0.7 0.7 0.7 1" density="0" mesh="left_wrist_roll_link"/>
                       <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="left_wrist_roll_link"/>
-                      <site name="left_hand_cam_mount" quat="-0.948209 0.31607 0 0.031607" size="0.01" pos="0.15 0.1 0.1" rgba="0.2 0.8 0.2 1"/>
-                      <site name="right_hand_cam_mount" quat="0.57735 0.57735 0 0.57735" size="0.01" pos="0.1 0.1 0.1" rgba="0.2 0.8 0.2 1"/>
+                      <site name="left_hand_cam_mount" quat="-0.948209 0.31607 0 0.031607" size="0.01" pos="0.15 0.1 0.1" rgba="0.2 0.8 0.2 0"/>
+                      <site name="right_hand_cam_mount" quat="0.57735 0.57735 0 0.57735" size="0.01" pos="0.1 0.1 0.1" rgba="0.2 0.8 0.2 0"/>
                       <body name="left_wrist_pitch_link" pos="0.038 0 0">
                         <inertial pos="0.0229999 -0.00111685 -0.00111658" quat="0.249998 0.661363 0.293036 0.643608" mass="0.48405" diaginertia="0.000430353 0.000429873 0.000164648"/>
                         <joint name="left_wrist_pitch_joint" class="wrist_motor" range="-1.61443 1.61443" actuatorfrcrange="-5 5" axis="0 1 0"/>

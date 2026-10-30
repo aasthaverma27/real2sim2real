@@ -122,7 +122,16 @@ WBC. It needs the openpi client package once:
 pip install "openpi-client @ git+https://github.com/Physical-Intelligence/openpi.git#subdirectory=packages/openpi-client"
 ```
 
-Then, with the WBC running:
+Then, with the WBC running, open a container shell with the same ROS setting
+as the controller:
+
+```bash
+docker exec -it -w /root/Projects/GR00T-WholeBodyControl -e ROS_LOCALHOST_ONLY=1 decoupled_wbc-bash-root bash
+source /root/venv/bin/activate; source /opt/ros/humble/setup.bash
+export PYTHONPATH=/root/Projects/GR00T-WholeBodyControl:$PYTHONPATH
+```
+
+and run the loop:
 
 ```bash
 # one action chunk printed next to the measured state, nothing sent to the robot

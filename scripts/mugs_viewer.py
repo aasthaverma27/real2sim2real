@@ -124,6 +124,9 @@ def main() -> int:
     model.cam_fovy[cid] = fovy
 
     exclude = {e.strip() for e in a.exclude_geoms.split(",") if e.strip()}
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from mugs_render import hide_excluded_objects
+    hide_excluded_objects(model, exclude)          # no shadows from left-out objects
 
     def is_fg(g):
         if int(model.geom_bodyid[g]) == 0:

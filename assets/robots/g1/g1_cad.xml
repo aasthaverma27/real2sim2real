@@ -215,7 +215,7 @@
             
             <body name="lidar_link" pos="0 0 0.70">
               <inertial pos="0 0 0" mass="0.001" diaginertia="1e-9 1e-9 1e-9" />
-              <site name="lidar_origin" size="0.02" pos="0 0 0" rgba="0 1 0 1" />
+              <site name="lidar_origin" size="0.02" pos="0 0 0" rgba="0 1 0 0" />
 
               
               <replicate count="72" offset="0 0 0" euler="0 0 0.0872665">
@@ -250,10 +250,10 @@
                       <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="left_wrist_roll_link" />
                      
                       
-                      <site name="left_hand_cam_mount" size="0.01" pos="0.15 0.1 0.1" quat="-3 1 0 0.1" rgba="0.2 0.8 0.2 1" />
+                      <site name="left_hand_cam_mount" size="0.01" pos="0.15 0.1 0.1" quat="-3 1 0 0.1" rgba="0.2 0.8 0.2 0" />
                       
                       
-                      <site name="right_hand_cam_mount" size="0.01" pos="0.1 0.1 0.1" quat="0.1 0.1 0 0.1" rgba="0.2 0.8 0.2 1" />
+                      <site name="right_hand_cam_mount" size="0.01" pos="0.1 0.1 0.1" quat="0.1 0.1 0 0.1" rgba="0.2 0.8 0.2 0" />
 
                       <body name="left_wrist_pitch_link" pos="0.038 0 0">
                         <inertial pos="0.0229999 -0.00111685 -0.00111658" quat="0.249998 0.661363 0.293036 0.643608" mass="0.48405" diaginertia="0.000430353 0.000429873 0.000164648" />

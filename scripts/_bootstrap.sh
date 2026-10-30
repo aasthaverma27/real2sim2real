@@ -56,6 +56,14 @@ case ":$PATH:" in
     *) export PATH="$(dirname "$RS_PY_SIM"):$PATH" ;;
 esac
 
+# Build those kernels for this machine's GPU only. Unset, torch compiles for
+# every architecture it knows, which makes the first build many times slower.
+if [ -z "${TORCH_CUDA_ARCH_LIST:-}" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    _cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    [ -n "$_cc" ] && export TORCH_CUDA_ARCH_LIST="$_cc"
+    unset _cc
+fi
+
 export PYTHONPATH="$RS_ROOT:$RS_ROOT/third_party/MuGS/src${PYTHONPATH:+:$PYTHONPATH}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export DISPLAY="${DISPLAY:-:0}"

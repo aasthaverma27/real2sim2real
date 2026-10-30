@@ -50,7 +50,7 @@ SIM="$RS_PY_SIM"
 VENVSIM="${RS_PY_DDS:-}"
 SCENE=""
 ROBOT=g1_cad
-CAMERA=cap
+CAMERA=cap; CAMERA_SET=0
 FOVY=""            # empty: let the viewer use the scene's own camera fovy
 STATE_PORT=5601
 CAM_STATE_PORT=5602
@@ -112,7 +112,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --scene)   SCENE="$2"; shift 2 ;;
     --robot)   ROBOT="$2"; shift 2 ;;
-    --camera)  CAMERA="$2"; shift 2 ;;
+    --camera)  CAMERA="$2"; CAMERA_SET=1; shift 2 ;;
     --fovy)    FOVY="$2"; shift 2 ;;
     --builtin) BUILTIN=1; shift ;;
     --vla)     VLA=1; shift ;;
@@ -213,6 +213,11 @@ EXARGS=(); [ -n "$EXCLUDE" ] && { EXARGS=(--exclude-geoms "$EXCLUDE"); echo "[st
 
 RENDER_MJCF="$SCENE/mujoco/scene_g1.xml"
 [ -f "$RENDER_MJCF" ] || RENDER_MJCF="$SCENE/mujoco/scene_robot.xml"
+# "cap" is the capture camera build_sim_scene.sh adds. Scenes without it (the
+# prebuilt ones in scenes/) are framed by their own world camera instead.
+if [ "$CAMERA_SET" = 0 ] && [ -f "$RENDER_MJCF" ] && ! grep -q "<camera name=\"$CAMERA\"" "$RENDER_MJCF"; then
+  CAMERA=scene_view
+fi
 WBC_MJCF="$SCENE/mujoco/wbc/scene_wbc.xml"
 PLY=$(ls -t "$SCENE"/gs_bg_notripod.ply "$SCENE"/gs_bg_clean.ply "$SCENE"/gs_bg.ply 2>/dev/null | head -1)
 if [ ! -f "$RENDER_MJCF" ]; then
@@ -279,6 +284,11 @@ if [ $((USED + NEED)) -gt "$CEIL" ]; then
   nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader >&2
   exit 1
 fi
+
+# Compile gsplat's kernels before any window opens. On a fresh machine this takes
+# a few minutes; done inside the renderers instead, every window stays black
+# while three processes compile at once and the waits below time out.
+"$ROOT/scripts/build_gsplat.sh" || exit 1
 
 wait_for() {   # wait_for <log> <pattern> <label>
   echo -n "[start] $3 "
@@ -427,7 +437,7 @@ cat <<EOF
 
 The sim is WAITING FOR WBC and the robot is falling. Start your controller:
 
-  docker exec -it -w /root/Projects/GR00T-WholeBodyControl \\
+  docker exec -it -w /root/Projects/GR00T-WholeBodyControl -e ROS_LOCALHOST_ONLY=1 \\
       -e PYTHONPATH=/root/Projects/GR00T-WholeBodyControl ${WBC_ENV}decoupled_wbc-bash-root bash -c '
     source /root/venv/bin/activate; source /opt/ros/humble/setup.bash
     python decoupled_wbc/control/main/teleop/run_g1_control_loop.py \\
@@ -439,7 +449,7 @@ The sim is WAITING FOR WBC and the robot is falling. Start your controller:
 
 then press ] to activate it. Confirm 'Use policy action: True'.
 
-Three things in that command are load-bearing:
+These parts of that command are load-bearing:
   -it              the default keyboard dispatcher reads stdin; with no TTY the
                    ] keypress never lands and use_policy_action stays False
   source ...       docker exec skips /root/.bashrc, which is what activates the
@@ -447,12 +457,16 @@ Three things in that command are load-bearing:
   PYTHONPATH=...   makes the MOUNTED checkout (with our patch: DOMAIN_ID 99,
                    the VLA camera client) win over the copy baked into the
                    image, whose config says DOMAIN_ID: 0 - the real robot. Our
-                   sim is on 99, so it would connect to nothing, silently.${WBC_ENV:+
+                   sim is on 99, so it would connect to nothing, silently.
+  ROS_LOCALHOST_ONLY=1  keeps ROS 2 discovery on this machine. Every container
+                   process (teleop, exporter, pi0.5 policy loop) needs the same
+                   value, or they do not see each other's topics.${WBC_ENV:+
   G1_DEFAULT_ELBOW this scene's resting arm pose (spawn_pose.json); without it
                    the controller pulls the arms down onto the objects}
 
 (container not up:  cd $RS_DEPLOY_ROOT && ./decoupled_wbc/docker/run_docker.sh --root
- - it opens a shell in the container; run the command above from another terminal)
+ - it opens a shell in the container; run the command above from another terminal.
+ If your user is not in the docker group, prefix docker with sudo.)
 EOF
 fi
 echo

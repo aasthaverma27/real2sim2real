@@ -112,6 +112,8 @@ def main() -> int:
                                     - data.cam_xpos[ids["right"]]))
 
     exclude = {x.strip() for x in a.exclude_geoms.split(",") if x.strip()}
+    from mugs_render import hide_excluded_objects
+    hide_excluded_objects(model, exclude)          # no shadows from left-out objects
     fg = [g for g in range(model.ngeom)
           if int(model.geom_bodyid[g]) != 0 and int(model.geom_group[g]) != 3
           and not any(x in (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")

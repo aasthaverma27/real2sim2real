@@ -99,6 +99,32 @@ def inject_capture_camera(mjcf: Path, gravity_json: Path, fovy: float) -> tuple[
     return out, "capture"
 
 
+def hide_excluded_objects(model, exclude: set[str]) -> int:
+    """Make excluded movable objects fully transparent; returns how many geoms.
+
+    Leaving a geom out of the foreground only stops it being composited: MuJoCo
+    still draws it into the shadow map, so an object left out of a run (a fruit
+    not on the plate) darkens whatever it sits on. A geom with alpha 0 casts no
+    shadow. Only bodies with a free joint are touched; static exclusions (the
+    floor, a table the splat shows) keep their look.
+    """
+    import mujoco
+
+    free = {int(model.jnt_bodyid[j]) for j in range(model.njnt)
+            if int(model.jnt_type[j]) == mujoco.mjtJoint.mjJNT_FREE}
+    n = 0
+    for gid in range(model.ngeom):
+        bid = int(model.geom_bodyid[gid])
+        if bid not in free:
+            continue
+        gname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
+        bname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, bid) or ""
+        if any(x and (x in gname or x in bname) for x in exclude):
+            model.geom_rgba[gid, 3] = 0.0
+            n += 1
+    return n
+
+
 def foreground_geom_ids(model, exclude: set[str]) -> list[int]:
     """Visual geoms that belong on top of the splat.
 

@@ -342,7 +342,7 @@
             <camera name="g1_elp_left" quat="0.67746 0.202603 -0.202603 -0.67746" resolution="768 432" pos="0.11727 0.03138 0.44376" fovy="53.35"/>
             <body name="g1_lidar_link" pos="0 0 0.7">
               <inertial pos="0 0 0" mass="0.001" diaginertia="1e-09 1e-09 1e-09"/>
-              <site name="g1_lidar_origin" size="0.02" rgba="0 1 0 1"/>
+              <site name="g1_lidar_origin" size="0.02" rgba="0 1 0 0"/>
               <site name="g1_rf00" quat="0.707105 0 0.707108 0" rgba="1 0 0 0"/>
               <site name="g1_rf01" quat="0.706432 -0.0308436 0.706435 0.0308435" rgba="1 0 0 0"/>
               <site name="g1_rf02" quat="0.704415 -0.0616286 0.704417 0.0616283" rgba="1 0 0 0"/>
@@ -441,8 +441,8 @@
                       <joint name="g1_left_wrist_roll_joint" class="g1_arm_motor" range="-1.97222 1.97222" actuatorfrcrange="-25 25" axis="1 0 0"/>
                       <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="0.7 0.7 0.7 1" density="0" mesh="g1_left_wrist_roll_link"/>
                       <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="g1_left_wrist_roll_link"/>
-                      <site name="g1_left_hand_cam_mount" quat="-0.948209 0.31607 0 0.031607" size="0.01" pos="0.15 0.1 0.1" rgba="0.2 0.8 0.2 1"/>
-                      <site name="g1_right_hand_cam_mount" quat="0.57735 0.57735 0 0.57735" size="0.01" pos="0.1 0.1 0.1" rgba="0.2 0.8 0.2 1"/>
+                      <site name="g1_left_hand_cam_mount" quat="-0.948209 0.31607 0 0.031607" size="0.01" pos="0.15 0.1 0.1" rgba="0.2 0.8 0.2 0"/>
+                      <site name="g1_right_hand_cam_mount" quat="0.57735 0.57735 0 0.57735" size="0.01" pos="0.1 0.1 0.1" rgba="0.2 0.8 0.2 0"/>
                       <body name="g1_left_wrist_pitch_link" pos="0.038 0 0">
                         <inertial pos="0.0229999 -0.00111685 -0.00111658" quat="0.249998 0.661363 0.293036 0.643608" mass="0.48405" diaginertia="0.000430353 0.000429873 0.000164648"/>
                         <joint name="g1_left_wrist_pitch_joint" class="g1_wrist_motor" range="-1.61443 1.61443" actuatorfrcrange="-5 5" axis="0 1 0"/>
@@ -734,6 +734,8 @@
       <geom name="obj11_kiwi_vis" class="visual" material="obj11_kiwi_mat" mesh="obj11_kiwi_visual"/>
       <geom name="obj11_kiwi_coll_0_g" class="collision" mesh="obj11_kiwi_coll_0"/>
     </body>
+      <!-- "cap": the hybrid window's framing from realsim_view.json, so start.sh --builtin opens on it -->
+    <camera name="cap" pos="0.003228 -0.820205 1.478818" quat="0.824095 0.566385 -0.004943 -0.007192" fovy="55.4"/>
   </worldbody>
 
   <actuator>

@@ -1,7 +1,7 @@
 [project]
-name = "robosnap"
+name = "real2sim2real"
 version = "0.1.0"
-description = "One-shot real-to-sim scene generation toolkit."
+description = "Photoreal MuJoCo digital twins from a phone video for humanoid VLA policies."
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [

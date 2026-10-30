@@ -50,8 +50,7 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene-dir", type=Path, required=True)
     # The G1 lives in the repo under assets/robots/g1 so it can be edited here
-    # instead of in whichever modinoid_sim checkout happens to be on the box -
-    # there are five copies on this machine and they are not interchangeable.
+    # instead of in an external robot-model checkout.
     p.add_argument("--robot", type=Path,
                    default=Path(__file__).resolve().parent.parent
                            / "assets/robots/g1/g1_29dof_with_hand.xml",

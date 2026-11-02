@@ -56,6 +56,13 @@ case ":$PATH:" in
     *) export PATH="$(dirname "$RS_PY_SIM"):$PATH" ;;
 esac
 
+# Conda's cuda-toolkit keeps its headers under targets/; nvcc finds them, but
+# the host compiler building gsplat's .cpp files does not, and the build dies
+# with "cuda_runtime_api.h: No such file or directory".
+_cuda_inc="$(dirname "$(dirname "$RS_PY_SIM")")/targets/x86_64-linux/include"
+[ -d "$_cuda_inc" ] && export CPATH="$_cuda_inc${CPATH:+:$CPATH}"
+unset _cuda_inc
+
 # Build those kernels for this machine's GPU only. Unset, torch compiles for
 # every architecture it knows, which makes the first build many times slower.
 if [ -z "${TORCH_CUDA_ARCH_LIST:-}" ] && command -v nvidia-smi >/dev/null 2>&1; then
